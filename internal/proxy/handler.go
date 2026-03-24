@@ -146,15 +146,11 @@ func (h *Handler) forwardResponse(w http.ResponseWriter, req *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		writeProxyError(w, fmt.Errorf("read response: %w", err))
-		return
-	}
-
 	copyHeaders(w.Header(), resp.Header, nil)
 	w.WriteHeader(resp.StatusCode)
-	_, _ = w.Write(body)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		log.Printf("forward response failed: %v", err)
+	}
 }
 
 func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *http.Request) {
@@ -177,17 +173,8 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *ht
 }
 
 func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.ResolvedIdentity, organizationID string) error {
-	identityID := strings.TrimSpace(resolved.IdentityID)
-	if identityID == "" {
-		return errors.New("identity id is required")
-	}
-	orgID := strings.TrimSpace(organizationID)
-	if orgID == "" {
-		return errors.New("organization id is required")
-	}
-
-	user := fmt.Sprintf("identity:%s", identityID)
-	object := fmt.Sprintf("organization:%s", orgID)
+	user := fmt.Sprintf("identity:%s", resolved.IdentityID)
+	object := fmt.Sprintf("organization:%s", organizationID)
 
 	resp, err := h.authzClient.Check(ctx, &authorizationv1.CheckRequest{
 		TupleKey: &authorizationv1.TupleKey{
@@ -199,9 +186,6 @@ func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.Resolv
 	if err != nil {
 		return err
 	}
-	if resp == nil {
-		return errors.New("authorization response missing")
-	}
 	if !resp.GetAllowed() {
 		return ErrForbidden
 	}
@@ -209,16 +193,7 @@ func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.Resolv
 }
 
 func buildProviderRequest(ctx context.Context, endpoint string, token string, body []byte, stream bool) (*http.Request, error) {
-	trimmedEndpoint := strings.TrimSpace(endpoint)
-	if trimmedEndpoint == "" {
-		return nil, errors.New("provider endpoint is required")
-	}
-	trimmedToken := strings.TrimSpace(token)
-	if trimmedToken == "" {
-		return nil, errors.New("provider token is required")
-	}
-
-	url := strings.TrimRight(trimmedEndpoint, "/") + "/v1/responses"
+	url := endpoint + "/v1/responses"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
@@ -228,7 +203,7 @@ func buildProviderRequest(ctx context.Context, endpoint string, token string, bo
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
-	req.Header.Set("Authorization", "Bearer "+trimmedToken)
+	req.Header.Set("Authorization", "Bearer "+token)
 
 	return req, nil
 }
@@ -293,7 +268,17 @@ func writeProxyError(w http.ResponseWriter, err error) {
 			statusCode = http.StatusForbidden
 		}
 	}
-	http.Error(w, err.Error(), statusCode)
+
+	message := err.Error()
+	if statusCode >= http.StatusInternalServerError {
+		log.Printf("proxy error: %v", err)
+		message = http.StatusText(statusCode)
+		if message == "" {
+			message = "server error"
+		}
+	}
+
+	http.Error(w, message, statusCode)
 }
 
 func grpcStatusToHTTP(code codes.Code) int {

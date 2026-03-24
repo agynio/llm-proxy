@@ -14,6 +14,8 @@ import (
 	"github.com/agynio/llm-proxy/internal/identity"
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type fakeLLMClient struct {
@@ -234,5 +236,151 @@ func TestHandlerInvalidBody(t *testing.T) {
 
 	if resp.Code != http.StatusBadRequest {
 		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, resp.Code)
+	}
+}
+
+func TestHandlerRouteHandling(t *testing.T) {
+	handler := NewHandler(&fakeLLMClient{}, &fakeAuthzClient{}, http.DefaultClient)
+
+	getReq := httptest.NewRequest(http.MethodGet, "http://example.com/v1/responses", nil)
+	getResp := httptest.NewRecorder()
+	handler.ServeHTTP(getResp, getReq)
+
+	if getResp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, getResp.Code)
+	}
+	if allow := getResp.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("expected allow header %q, got %q", http.MethodPost, allow)
+	}
+
+	postReq := httptest.NewRequest(http.MethodPost, "http://example.com/v1/other", strings.NewReader(`{"model":"`+uuid.NewString()+`"}`))
+	postResp := httptest.NewRecorder()
+	handler.ServeHTTP(postResp, postReq)
+
+	if postResp.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, postResp.Code)
+	}
+}
+
+func TestHandlerGRPCErrorMapping(t *testing.T) {
+	modelID := uuid.New()
+	llmClient := &fakeLLMClient{err: status.Error(codes.NotFound, "missing")}
+	handler := NewHandler(llmClient, &fakeAuthzClient{}, http.DefaultClient)
+
+	body := `{"model":"` + modelID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, resp.Code)
+	}
+	if !strings.Contains(resp.Body.String(), "NotFound") {
+		t.Fatalf("expected not found message, got %q", resp.Body.String())
+	}
+
+	llmClient.err = status.Error(codes.Unavailable, "down")
+	req = httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	ctx = identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp = httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status %d, got %d", http.StatusServiceUnavailable, resp.Code)
+	}
+	if strings.TrimSpace(resp.Body.String()) != http.StatusText(http.StatusServiceUnavailable) {
+		t.Fatalf("expected generic error message, got %q", resp.Body.String())
+	}
+}
+
+func TestHandlerProviderErrorForwardingNonStream(t *testing.T) {
+	modelID := uuid.New()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"error":"rate limit"}`))
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL,
+		Token:          "provider-token",
+		RemoteName:     "remote-model",
+		OrganizationId: "org-1",
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+	handler := NewHandler(llmClient, authzClient, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `","stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected status %d, got %d", http.StatusTooManyRequests, resp.Code)
+	}
+	if strings.TrimSpace(resp.Body.String()) != `{"error":"rate limit"}` {
+		t.Fatalf("unexpected response body: %s", resp.Body.String())
+	}
+}
+
+func TestHandlerProviderErrorForwardingStream(t *testing.T) {
+	modelID := uuid.New()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("oops"))
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL,
+		Token:          "provider-token",
+		RemoteName:     "remote-model",
+		OrganizationId: "org-1",
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+	handler := NewHandler(llmClient, authzClient, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `","stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusInternalServerError {
+		t.Fatalf("expected status %d, got %d", http.StatusInternalServerError, resp.Code)
+	}
+	if strings.TrimSpace(resp.Body.String()) != "oops" {
+		t.Fatalf("unexpected response body: %s", resp.Body.String())
+	}
+}
+
+func TestHandlerBodyTooLarge(t *testing.T) {
+	handler := NewHandler(&fakeLLMClient{}, &fakeAuthzClient{}, http.DefaultClient)
+
+	oversize := strings.Repeat("a", int(maxRequestBodySize)+1)
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(oversize))
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, resp.Code)
+	}
+	if strings.TrimSpace(resp.Body.String()) != "failed to read body" {
+		t.Fatalf("expected read body error, got %q", resp.Body.String())
 	}
 }
