@@ -42,11 +42,7 @@ func TestAuthValidToken(t *testing.T) {
 		t.Skip("api token not configured")
 	}
 
-	model := modelID()
-	if model == "" {
-		model = uuid.NewString()
-	}
-	body := requestBody(t, model, false)
+	body := requestBody(t, modelIDOrRandom(), false)
 	resp := doPost(t, newAuthenticatedClient(config.token), proxyURL, body)
 	defer resp.Body.Close()
 
@@ -56,13 +52,16 @@ func TestAuthValidToken(t *testing.T) {
 func TestAuthZitiToken(t *testing.T) {
 	client := newZitiClient(t)
 
-	model := modelID()
-	if model == "" {
-		model = uuid.NewString()
-	}
-	body := requestBody(t, model, false)
+	body := requestBody(t, modelIDOrRandom(), false)
 	resp := doPost(t, client, zitiProxyURL(), body)
 	defer resp.Body.Close()
 
 	assert.NotEqual(t, http.StatusUnauthorized, resp.StatusCode)
+}
+
+func modelIDOrRandom() string {
+	if model := modelID(); model != "" {
+		return model
+	}
+	return uuid.NewString()
 }

@@ -35,7 +35,7 @@ func TestMain(m *testing.M) {
 }
 
 func newClient() *http.Client {
-	return &http.Client{Timeout: requestTimeout}
+	return &http.Client{}
 }
 
 func newAuthenticatedClient(token string) *http.Client {
@@ -150,7 +150,6 @@ func newZitiClient(t *testing.T) *http.Client {
 	})
 
 	client := sdk.NewHttpClient(zitiContext, nil)
-	client.Timeout = requestTimeout
 	return client
 }
 
