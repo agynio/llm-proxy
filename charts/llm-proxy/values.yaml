@@ -153,3 +153,4 @@ llmProxy:
   zitiManagementAddress: "ziti-management:50051"
   zitiEnabled: false
   zitiLeaseRenewalInterval: "2m"
+  zitiEnrollmentTimeout: "5m"

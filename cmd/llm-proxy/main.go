@@ -105,7 +105,7 @@ func run() error {
 
 		var zitiIdentityID string
 		var identityJSON []byte
-		if err := retryWithBackoff(enrollmentCtx, func(attemptCtx context.Context) error {
+		if err := retryWithBackoff(enrollmentCtx, "ziti enrollment", func(attemptCtx context.Context) error {
 			var requestErr error
 			zitiIdentityID, identityJSON, requestErr = zitiMgmtClient.RequestServiceIdentity(attemptCtx, zitimgmtv1.ServiceType_SERVICE_TYPE_LLM_PROXY)
 			return requestErr
@@ -180,7 +180,7 @@ func renewLease(ctx context.Context, client *zitimgmtclient.Client, identityID s
 	}
 }
 
-func retryWithBackoff(ctx context.Context, fn func(context.Context) error) error {
+func retryWithBackoff(ctx context.Context, operationName string, fn func(context.Context) error) error {
 	backoff := retryInitialBackoff
 	attempt := 1
 	for {
@@ -197,20 +197,8 @@ func retryWithBackoff(ctx context.Context, fn func(context.Context) error) error
 		if delay > retryMaxBackoff {
 			delay = retryMaxBackoff
 		}
-		if deadline, ok := ctx.Deadline(); ok {
-			remaining := time.Until(deadline)
-			if remaining <= 0 {
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				return context.DeadlineExceeded
-			}
-			if delay > remaining {
-				delay = remaining
-			}
-		}
 
-		log.Printf("ziti enrollment failed (attempt %d), retrying in %s: %v", attempt, delay, err)
+		log.Printf("%s failed (attempt %d), retrying in %s: %v", operationName, attempt, delay, err)
 
 		timer := time.NewTimer(delay)
 		select {
@@ -220,11 +208,9 @@ func retryWithBackoff(ctx context.Context, fn func(context.Context) error) error
 		case <-timer.C:
 		}
 
-		if backoff < retryMaxBackoff {
-			backoff *= 2
-			if backoff > retryMaxBackoff {
-				backoff = retryMaxBackoff
-			}
+		backoff *= 2
+		if backoff > retryMaxBackoff {
+			backoff = retryMaxBackoff
 		}
 		attempt++
 	}
