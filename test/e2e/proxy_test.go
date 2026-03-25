@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/google/uuid"
 )
 
 func TestProxyUnauthorizedModel(t *testing.T) {
@@ -16,6 +18,16 @@ func TestProxyUnauthorizedModel(t *testing.T) {
 
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected status %d, got %d", http.StatusForbidden, resp.StatusCode)
+	}
+}
+
+func TestProxyUnknownModel(t *testing.T) {
+	client := newAuthenticatedClient(testAPIToken)
+	resp := doPost(t, client, responsesURL(), requestBody(t, uuid.NewString(), "hi", false))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, resp.StatusCode)
 	}
 }
 
@@ -50,5 +62,8 @@ func TestProxyStreamResponse(t *testing.T) {
 	events := readSSEEvents(t, resp.Body)
 	if len(events) == 0 {
 		t.Fatalf("expected streamed events")
+	}
+	if events[len(events)-1] != "response.completed" {
+		t.Fatalf("expected final event response.completed, got %q", events[len(events)-1])
 	}
 }

@@ -101,8 +101,6 @@ deployments:
                 value: "tenants:50051"
               - name: LLM_ADDR
                 value: "llm:50051"
-              - name: AUTHORIZATION_ADDR
-                value: "authorization:50051"
         labels:
           app.kubernetes.io/name: llm-proxy-e2e
 

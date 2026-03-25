@@ -25,12 +25,15 @@ func TestMain(m *testing.M) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	if err := setupFixtures(ctx); err != nil {
+	cleanup, err := setupFixtures(ctx)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "e2e setup failed: %v\n", err)
 		os.Exit(1)
 	}
 
-	os.Exit(m.Run())
+	code := m.Run()
+	cleanup()
+	os.Exit(code)
 }
 
 func proxyURL() string {
@@ -62,7 +65,6 @@ type bearerTransport struct {
 
 func (t bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
-	clone.Header = clone.Header.Clone()
 	clone.Header.Set("Authorization", "Bearer "+t.token)
 	return t.base.RoundTrip(clone)
 }
@@ -119,10 +121,10 @@ func readSSEEvents(t *testing.T, body io.Reader) []string {
 		if line == "" {
 			continue
 		}
-		if !strings.HasPrefix(line, "data:") {
+		if !strings.HasPrefix(line, "event:") {
 			continue
 		}
-		events = append(events, strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		events = append(events, strings.TrimSpace(strings.TrimPrefix(line, "event:")))
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatalf("read stream: %v", err)
