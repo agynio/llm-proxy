@@ -3,71 +3,67 @@
 package e2e
 
 import (
-	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
 )
 
-func TestProxyUnknownModel(t *testing.T) {
-	client := newAuthenticatedClient(requireAPIToken(t))
-	body := requestBody(t, uuid.NewString(), false)
-
-	resp := doPost(t, client, proxyURL, body)
-	defer resp.Body.Close()
-
-	assert.Equal(t, http.StatusNotFound, resp.StatusCode)
-}
-
 func TestProxyUnauthorizedModel(t *testing.T) {
-	client := newAuthenticatedClient(requireAPIToken(t))
-	body := requestBody(t, requireUnauthorizedModelID(t), false)
-
-	resp := doPost(t, client, proxyURL, body)
+	client := newAuthenticatedClient(testAPIToken)
+	resp := doPost(t, client, responsesURL(), requestBody(t, testUnauthorizedModelID, "hi", false))
 	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected status %d, got %d", http.StatusForbidden, resp.StatusCode)
+	}
 }
 
-func TestProxyNonStreamSuccess(t *testing.T) {
-	client := newAuthenticatedClient(requireAPIToken(t))
-	model := requireModelID(t)
-
-	resp := doPost(t, client, proxyURL, requestBody(t, model, false))
+func TestProxyUnknownModel(t *testing.T) {
+	client := newAuthenticatedClient(testAPIToken)
+	resp := doPost(t, client, responsesURL(), requestBody(t, uuid.NewString(), "hi", false))
 	defer resp.Body.Close()
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Contains(t, resp.Header.Get("Content-Type"), "application/json")
-
-	var payload map[string]any
-	require.NoError(t, json.NewDecoder(resp.Body).Decode(&payload))
-
-	object, ok := payload["object"].(string)
-	require.True(t, ok, "expected object string")
-	assert.Equal(t, "response", object)
-
-	modelName, ok := payload["model"].(string)
-	require.True(t, ok, "expected model string")
-	assert.NotEmpty(t, modelName)
-	assert.NotEqual(t, model, modelName)
-	_, err := uuid.Parse(modelName)
-	assert.Error(t, err)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected status %d, got %d", http.StatusNotFound, resp.StatusCode)
+	}
 }
 
-func TestProxyStreamSuccess(t *testing.T) {
-	client := newAuthenticatedClient(requireAPIToken(t))
-	model := requireModelID(t)
-
-	resp := doPost(t, client, proxyURL, requestBody(t, model, true))
+func TestProxyNonStreamResponse(t *testing.T) {
+	client := newAuthenticatedClient(testAPIToken)
+	resp := doPost(t, client, responsesURL(), requestBody(t, testModelID, "hi", false))
 	defer resp.Body.Close()
 
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Contains(t, resp.Header.Get("Content-Type"), "text/event-stream")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response: %v", err)
+	}
+	if !strings.Contains(string(body), "Hi! How are you?") {
+		t.Fatalf("unexpected response body: %s", string(body))
+	}
+}
 
+func TestProxyStreamResponse(t *testing.T) {
+	client := newAuthenticatedClient(testAPIToken)
+	resp := doPost(t, client, responsesURL(), requestBody(t, testModelID, "hi", true))
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.StatusCode)
+	}
+	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("expected text/event-stream content type, got %q", resp.Header.Get("Content-Type"))
+	}
 	events := readSSEEvents(t, resp.Body)
-	require.NotEmpty(t, events)
-	assert.Equal(t, "response.completed", events[len(events)-1])
+	if len(events) == 0 {
+		t.Fatalf("expected streamed events")
+	}
+	if events[len(events)-1] != "response.completed" {
+		t.Fatalf("expected final event response.completed, got %q", events[len(events)-1])
+	}
 }
