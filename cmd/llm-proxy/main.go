@@ -99,6 +99,13 @@ func run() error {
 
 	errCh := make(chan error, 2)
 
+	go func() {
+		log.Printf("llm-proxy listening on %s", cfg.ListenAddress)
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			errCh <- fmt.Errorf("http server stopped: %w", err)
+		}
+	}()
+
 	if cfg.ZitiEnabled {
 		enrollmentCtx, cancel := context.WithTimeout(ctx, cfg.ZitiEnrollmentTimeout)
 		defer cancel()
@@ -138,13 +145,6 @@ func run() error {
 			}
 		}()
 	}
-
-	go func() {
-		log.Printf("llm-proxy listening on %s", cfg.ListenAddress)
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			errCh <- fmt.Errorf("http server stopped: %w", err)
-		}
-	}()
 
 	select {
 	case <-ctx.Done():
