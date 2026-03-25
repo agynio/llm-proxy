@@ -15,6 +15,7 @@ const (
 	defaultAuthzServiceAddress   = "authorization:50051"
 	defaultZitiManagementAddress = "ziti-management:50051"
 	defaultZitiLeaseInterval     = 2 * time.Minute
+	defaultZitiEnrollmentTimeout = 5 * time.Minute
 )
 
 type Config struct {
@@ -25,6 +26,7 @@ type Config struct {
 	ZitiManagementAddress       string
 	ZitiEnabled                 bool
 	ZitiLeaseRenewalInterval    time.Duration
+	ZitiEnrollmentTimeout       time.Duration
 }
 
 func LoadConfigFromEnv() (*Config, error) {
@@ -41,6 +43,14 @@ func LoadConfigFromEnv() (*Config, error) {
 		return nil, fmt.Errorf("ZITI_LEASE_RENEWAL_INTERVAL must be positive")
 	}
 
+	zitiEnrollmentTimeout, err := envDuration("ZITI_ENROLLMENT_TIMEOUT", defaultZitiEnrollmentTimeout)
+	if err != nil {
+		return nil, err
+	}
+	if zitiEnrollmentTimeout <= 0 {
+		return nil, fmt.Errorf("ZITI_ENROLLMENT_TIMEOUT must be positive")
+	}
+
 	return &Config{
 		ListenAddress:               envOrDefault("LISTEN_ADDRESS", defaultListenAddress),
 		LLMServiceAddress:           envOrDefault("LLM_SERVICE_ADDRESS", defaultLLMServiceAddress),
@@ -49,6 +59,7 @@ func LoadConfigFromEnv() (*Config, error) {
 		ZitiManagementAddress:       envOrDefault("ZITI_MANAGEMENT_ADDRESS", defaultZitiManagementAddress),
 		ZitiEnabled:                 zitiEnabled,
 		ZitiLeaseRenewalInterval:    zitiLeaseRenewalInterval,
+		ZitiEnrollmentTimeout:       zitiEnrollmentTimeout,
 	}, nil
 }
 

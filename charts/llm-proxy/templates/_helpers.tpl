@@ -34,6 +34,11 @@
 {{- $env = append $env (dict "name" "ZITI_LEASE_RENEWAL_INTERVAL" "value" $zitiLease) -}}
 {{- end }}
 
+{{- $zitiEnrollmentTimeout := trimAll " \n\t" (default "5m" .Values.llmProxy.zitiEnrollmentTimeout) -}}
+{{- if $zitiEnrollmentTimeout }}
+{{- $env = append $env (dict "name" "ZITI_ENROLLMENT_TIMEOUT" "value" $zitiEnrollmentTimeout) -}}
+{{- end }}
+
 {{- $userEnv := .Values.env | default (list) -}}
 {{- $_ := set .Values "env" (concat $env $userEnv) -}}
 {{- end -}}

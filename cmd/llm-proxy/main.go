@@ -28,7 +28,11 @@ import (
 	"google.golang.org/grpc"
 )
 
-const shutdownTimeout = 10 * time.Second
+const (
+	shutdownTimeout     = 10 * time.Second
+	retryInitialBackoff = 1 * time.Second
+	retryMaxBackoff     = 30 * time.Second
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -96,8 +100,16 @@ func run() error {
 	errCh := make(chan error, 2)
 
 	if cfg.ZitiEnabled {
-		zitiIdentityID, identityJSON, err := zitiMgmtClient.RequestServiceIdentity(ctx, zitimgmtv1.ServiceType_SERVICE_TYPE_LLM_PROXY)
-		if err != nil {
+		enrollmentCtx, cancel := context.WithTimeout(ctx, cfg.ZitiEnrollmentTimeout)
+		defer cancel()
+
+		var zitiIdentityID string
+		var identityJSON []byte
+		if err := retryWithBackoff(enrollmentCtx, "ziti enrollment", func(attemptCtx context.Context) error {
+			var requestErr error
+			zitiIdentityID, identityJSON, requestErr = zitiMgmtClient.RequestServiceIdentity(attemptCtx, zitimgmtv1.ServiceType_SERVICE_TYPE_LLM_PROXY)
+			return requestErr
+		}); err != nil {
 			return fmt.Errorf("request ziti service identity: %w", err)
 		}
 
@@ -165,6 +177,42 @@ func renewLease(ctx context.Context, client *zitimgmtclient.Client, identityID s
 				log.Printf("failed to extend ziti lease: %v", err)
 			}
 		}
+	}
+}
+
+func retryWithBackoff(ctx context.Context, operationName string, fn func(context.Context) error) error {
+	backoff := retryInitialBackoff
+	attempt := 1
+	for {
+		err := fn(ctx)
+		if err == nil {
+			return nil
+		}
+
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+
+		delay := backoff
+		if delay > retryMaxBackoff {
+			delay = retryMaxBackoff
+		}
+
+		log.Printf("%s failed (attempt %d), retrying in %s: %v", operationName, attempt, delay, err)
+
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+
+		backoff *= 2
+		if backoff > retryMaxBackoff {
+			backoff = retryMaxBackoff
+		}
+		attempt++
 	}
 }
 

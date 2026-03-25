@@ -2,8 +2,8 @@ apiVersion: v2
 name: llm-proxy
 description: Helm chart for deploying the agyn LLM Proxy service.
 type: application
-version: 0.1.2
-appVersion: 0.1.2
+version: 0.1.3
+appVersion: 0.1.3
 home: https://github.com/agynio/llm-proxy
 sources:
   - https://github.com/agynio/llm-proxy
