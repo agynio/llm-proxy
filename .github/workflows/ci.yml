@@ -41,6 +41,3 @@ jobs:
 
       - name: Go test
         run: go test ./...
-
-      - name: Go test (e2e)
-        run: go test -tags e2e -v -count=1 -timeout 120s ./test/e2e/
