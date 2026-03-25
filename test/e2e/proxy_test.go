@@ -250,8 +250,6 @@ func TestProxyModelNotFound(t *testing.T) {
 
 	token := "agyn_missing_model"
 	fakeUsersServer.RegisterToken(token, "user-1")
-	allowIdentity("user-1", "org-1")
-	fakeAuthzServer.SetDefaultAllow(true)
 
 	body := `{"model":"` + missingModel + `"}`
 	req, err := http.NewRequest(http.MethodPost, proxyBaseURL+"/v1/responses", strings.NewReader(body))

@@ -38,9 +38,6 @@ func (f *FakeLLMServer) Reset() {
 func (f *FakeLLMServer) RegisterModel(modelID string, resp *llmv1.ResolveModelResponse) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.models == nil {
-		f.models = make(map[string]*llmv1.ResolveModelResponse)
-	}
 	f.models[modelID] = resp
 }
 
@@ -77,9 +74,6 @@ func (f *FakeUsersServer) RegisterToken(rawToken string, identityID string) stri
 	tokenHash := hex.EncodeToString(hash[:])
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.tokens == nil {
-		f.tokens = make(map[string]*usersv1.ResolveAPITokenResponse)
-	}
 	f.tokens[tokenHash] = &usersv1.ResolveAPITokenResponse{IdentityId: identityID}
 	return tokenHash
 }
@@ -124,9 +118,6 @@ func (f *FakeAuthzServer) SetCheck(user string, relation string, object string, 
 	key := authzKey(user, relation, object)
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.checks == nil {
-		f.checks = make(map[string]bool)
-	}
 	f.checks[key] = allowed
 }
 
@@ -166,9 +157,6 @@ func (f *FakeZitiMgmtServer) Reset() {
 func (f *FakeZitiMgmtServer) RegisterIdentity(zitiID string, identityID string, identityType identityv1.IdentityType) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if f.identities == nil {
-		f.identities = make(map[string]*zitimgmtv1.ResolveIdentityResponse)
-	}
 	f.identities[zitiID] = &zitimgmtv1.ResolveIdentityResponse{
 		IdentityId:   identityID,
 		IdentityType: identityType,
