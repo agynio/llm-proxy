@@ -5,13 +5,18 @@ package e2e
 import (
 	"net/http"
 	"testing"
-
-	"github.com/stretchr/testify/assert"
 )
 
-func TestProxyConnectivity(t *testing.T) {
-	resp := doRequest(t, newClient(), http.MethodGet, responsesURL(proxyURL), nil, "")
+func TestConnectivity(t *testing.T) {
+	client := newAuthenticatedClient(testAPIToken)
+	req, err := http.NewRequest(http.MethodGet, responsesURL(), nil)
+	if err != nil {
+		t.Fatalf("create request: %v", err)
+	}
+	resp := doRequest(t, client, req)
 	defer resp.Body.Close()
 
-	assert.Less(t, resp.StatusCode, http.StatusInternalServerError)
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, resp.StatusCode)
+	}
 }

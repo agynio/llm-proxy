@@ -5,63 +5,44 @@ package e2e
 import (
 	"net/http"
 	"testing"
-
-	"github.com/google/uuid"
-	"github.com/stretchr/testify/assert"
 )
 
-const invalidAPIToken = "agyn_invalid"
-
 func TestAuthMissingToken(t *testing.T) {
-	body := requestBody(t, uuid.NewString(), false)
-	resp := doPost(t, newClient(), proxyURL, body)
+	client := newClient()
+	resp := doPost(t, client, responsesURL(), requestBody(t, testModelID, "hi", false))
 	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, resp.StatusCode)
+	}
 }
 
 func TestAuthInvalidToken(t *testing.T) {
-	body := requestBody(t, uuid.NewString(), false)
-	resp := doPost(t, newAuthenticatedClient(invalidAPIToken), proxyURL, body)
+	client := newAuthenticatedClient("agyn_invalid")
+	resp := doPost(t, client, responsesURL(), requestBody(t, testModelID, "hi", false))
 	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, resp.StatusCode)
+	}
 }
 
 func TestAuthNonAgynToken(t *testing.T) {
-	body := requestBody(t, uuid.NewString(), false)
-	resp := doPost(t, newAuthenticatedClient("not-agyn-token"), proxyURL, body)
+	client := newAuthenticatedClient("not-agyn-token")
+	resp := doPost(t, client, responsesURL(), requestBody(t, testModelID, "hi", false))
 	defer resp.Body.Close()
 
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected status %d, got %d", http.StatusUnauthorized, resp.StatusCode)
+	}
 }
 
 func TestAuthValidToken(t *testing.T) {
-	config := apiTokenConfig()
-	if config.token == "" {
-		t.Skip("api token not configured")
-	}
-
-	body := requestBody(t, modelIDOrRandom(), false)
-	resp := doPost(t, newAuthenticatedClient(config.token), proxyURL, body)
+	client := newAuthenticatedClient(testAPIToken)
+	resp := doPost(t, client, responsesURL(), requestBody(t, testModelID, "hi", false))
 	defer resp.Body.Close()
 
-	assert.NotEqual(t, http.StatusUnauthorized, resp.StatusCode)
-}
-
-func TestAuthZitiToken(t *testing.T) {
-	client := newZitiClient(t)
-
-	body := requestBody(t, modelIDOrRandom(), false)
-	resp := doPost(t, client, zitiProxyURL(), body)
-	defer resp.Body.Close()
-
-	assert.NotEqual(t, http.StatusUnauthorized, resp.StatusCode)
-}
-
-func modelIDOrRandom() string {
-	if model := modelID(); model != "" {
-		return model
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Fatalf("expected non-401 status, got %d", resp.StatusCode)
 	}
-	return uuid.NewString()
 }

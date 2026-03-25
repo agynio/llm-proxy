@@ -95,6 +95,14 @@ deployments:
             env:
               - name: LLM_PROXY_URL
                 value: "http://llm-proxy:8080"
+              - name: USERS_ADDR
+                value: "users:50051"
+              - name: ORGANIZATIONS_ADDR
+                value: "tenants:50051"
+              - name: LLM_ADDR
+                value: "llm:50051"
+              - name: AUTHORIZATION_ADDR
+                value: "authorization:50051"
         labels:
           app.kubernetes.io/name: llm-proxy-e2e
 
@@ -145,7 +153,8 @@ pipelines:
           --path agynio/api/users/v1 \
           --path agynio/api/authorization/v1 \
           --path agynio/api/ziti_management/v1 \
-          --path agynio/api/identity/v1 && go test -v -count=1 -tags e2e ./test/e2e/'
+          --path agynio/api/identity/v1 \
+          --path agynio/api/organizations/v1 && go test -v -count=1 -tags e2e ./test/e2e/'
       EXIT_CODE=$?
       stop_dev e2e-runner
       purge_deployments e2e-runner
