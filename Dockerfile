@@ -44,8 +44,8 @@ WORKDIR /app
 
 COPY --from=build /out/llm-proxy /app/llm-proxy
 
-RUN addgroup -g 65532 -S app && adduser -u 65532 -S app -G app
+RUN addgroup -S app && adduser -S app -G app
 
-USER 65532
+USER 100
 
 ENTRYPOINT ["/app/llm-proxy"]
