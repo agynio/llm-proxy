@@ -64,7 +64,7 @@ func TestHandlerForwardNonStream(t *testing.T) {
 	providerCalled := false
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		providerCalled = true
-		if r.URL.Path != "/v1/responses" {
+		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		if r.Header.Get("Authorization") != "Bearer provider-token" {

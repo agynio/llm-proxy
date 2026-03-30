@@ -193,7 +193,7 @@ func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.Resolv
 }
 
 func buildProviderRequest(ctx context.Context, endpoint string, token string, body []byte, stream bool) (*http.Request, error) {
-	url := endpoint + "/v1/responses"
+	url := strings.TrimRight(endpoint, "/") + "/responses"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
