@@ -26,7 +26,7 @@ const (
 	defaultLLMAddr           = "llm:50051"
 	setupTimeout             = 30 * time.Second
 	apiTokenName             = "e2e-llm-proxy"
-	llmProviderEndpoint      = "https://testllm.dev/v1/org/agynio/suite/agn"
+	llmProviderEndpoint      = "https://testllm.dev/v1/org/agynio/suite/agn/responses"
 )
 
 var (

@@ -98,7 +98,7 @@ func TestHandlerForwardNonStream(t *testing.T) {
 	defer provider.Close()
 
 	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
-		Endpoint:       provider.URL,
+		Endpoint:       provider.URL + "/responses",
 		Token:          "provider-token",
 		RemoteName:     "remote-model",
 		OrganizationId: "org-1",
@@ -164,7 +164,7 @@ func TestHandlerForwardStream(t *testing.T) {
 	defer provider.Close()
 
 	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
-		Endpoint:       provider.URL,
+		Endpoint:       provider.URL + "/responses",
 		Token:          "provider-token",
 		RemoteName:     "remote-model",
 		OrganizationId: "org-1",
@@ -203,7 +203,7 @@ func TestHandlerForbidden(t *testing.T) {
 	defer provider.Close()
 
 	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
-		Endpoint:       provider.URL,
+		Endpoint:       provider.URL + "/responses",
 		Token:          "provider-token",
 		RemoteName:     "remote-model",
 		OrganizationId: "org-1",
