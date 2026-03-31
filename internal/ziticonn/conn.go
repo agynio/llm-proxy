@@ -10,6 +10,10 @@ type SourceIdentifiable interface {
 	SourceIdentifier() string
 }
 
+type DialerIdentifiable interface {
+	GetDialerIdentityId() string
+}
+
 type contextKey struct{}
 
 func WithSourceIdentity(ctx context.Context, identity string) context.Context {
@@ -26,6 +30,12 @@ func SourceIdentityFromContext(ctx context.Context) (string, bool) {
 }
 
 func SourceIdentityFromConn(conn net.Conn) (string, bool) {
+	if dialer, ok := conn.(DialerIdentifiable); ok {
+		identity := strings.TrimSpace(dialer.GetDialerIdentityId())
+		if identity != "" {
+			return identity, true
+		}
+	}
 	source, ok := conn.(SourceIdentifiable)
 	if !ok {
 		return "", false
