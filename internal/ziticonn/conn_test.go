@@ -22,15 +22,6 @@ type stubAddr struct{}
 func (stubAddr) Network() string { return "stub" }
 func (stubAddr) String() string  { return "stub" }
 
-type dialerSourceConn struct {
-	stubConn
-	dialerID string
-	sourceID string
-}
-
-func (conn dialerSourceConn) GetDialerIdentityId() string { return conn.dialerID }
-func (conn dialerSourceConn) SourceIdentifier() string    { return conn.sourceID }
-
 type dialerConn struct {
 	stubConn
 	dialerID string
@@ -38,26 +29,9 @@ type dialerConn struct {
 
 func (conn dialerConn) GetDialerIdentityId() string { return conn.dialerID }
 
-type sourceConn struct {
-	stubConn
-	sourceID string
-}
-
-func (conn sourceConn) SourceIdentifier() string { return conn.sourceID }
-
-func TestSourceIdentityFromConnPrefersDialerID(t *testing.T) {
-	conn := dialerSourceConn{dialerID: "dialer-id", sourceID: "source-id"}
+func TestSourceIdentityFromConnDialerID(t *testing.T) {
+	conn := dialerConn{dialerID: "dialer-id"}
 	assertSourceIdentity(t, conn, "dialer-id", true)
-}
-
-func TestSourceIdentityFromConnFallsBackToSourceIdentifier(t *testing.T) {
-	conn := dialerSourceConn{dialerID: "  ", sourceID: "source-id"}
-	assertSourceIdentity(t, conn, "source-id", true)
-}
-
-func TestSourceIdentityFromConnSourceOnly(t *testing.T) {
-	conn := sourceConn{sourceID: "source-id"}
-	assertSourceIdentity(t, conn, "source-id", true)
 }
 
 func TestSourceIdentityFromConnMissingIdentity(t *testing.T) {

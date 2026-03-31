@@ -7,9 +7,7 @@ import (
 
 	"github.com/agynio/llm-proxy/internal/identity"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/status"
 
 	identityv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/identity/v1"
 	zitimgmtv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/ziti_management/v1"
@@ -85,11 +83,6 @@ func (c *Client) ResolveIdentity(ctx context.Context, sourceIdentity string) (id
 
 	response, err := c.client.ResolveIdentity(ctx, &zitimgmtv1.ResolveIdentityRequest{ZitiIdentityId: trimmed})
 	if err != nil {
-		if status.Code(err) == codes.NotFound {
-			if resolved, ok := identity.ParseManagedIdentityName(trimmed); ok {
-				return resolved, nil
-			}
-		}
 		return identity.ResolvedIdentity{}, err
 	}
 
