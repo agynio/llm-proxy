@@ -6,8 +6,14 @@ import (
 	"github.com/google/uuid"
 )
 
-const managedAgentPrefix = "agent-"
+const (
+	managedAgentPrefix   = "agent-"
+	managedAgentUUIDSize = 36
+)
 
+// ParseManagedIdentityName parses managed identity names formatted as
+// "agent-<uuid>-<suffix>". The suffix must be non-empty and may contain
+// hyphens; it is ignored once the UUID is validated.
 func ParseManagedIdentityName(name string) (ResolvedIdentity, bool) {
 	trimmed := strings.TrimSpace(name)
 	if trimmed == "" {
@@ -18,12 +24,14 @@ func ParseManagedIdentityName(name string) (ResolvedIdentity, bool) {
 	}
 
 	remainder := strings.TrimPrefix(trimmed, managedAgentPrefix)
-	separator := strings.LastIndex(remainder, "-")
-	if separator <= 0 {
+	if len(remainder) < managedAgentUUIDSize+2 {
+		return ResolvedIdentity{}, false
+	}
+	if remainder[managedAgentUUIDSize] != '-' {
 		return ResolvedIdentity{}, false
 	}
 
-	agentID := remainder[:separator]
+	agentID := remainder[:managedAgentUUIDSize]
 	if _, err := uuid.Parse(agentID); err != nil {
 		return ResolvedIdentity{}, false
 	}
