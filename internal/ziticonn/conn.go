@@ -6,10 +6,6 @@ import (
 	"strings"
 )
 
-type SourceIdentifiable interface {
-	SourceIdentifier() string
-}
-
 type DialerIdentifiable interface {
 	GetDialerIdentityId() string
 }
@@ -36,13 +32,5 @@ func SourceIdentityFromConn(conn net.Conn) (string, bool) {
 			return identity, true
 		}
 	}
-	source, ok := conn.(SourceIdentifiable)
-	if !ok {
-		return "", false
-	}
-	identity := strings.TrimSpace(source.SourceIdentifier())
-	if identity == "" {
-		return "", false
-	}
-	return identity, true
+	return "", false
 }
