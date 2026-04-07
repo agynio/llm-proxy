@@ -20,6 +20,8 @@ import (
 const (
 	retryInitialBackoff = 1 * time.Second
 	retryMaxBackoff     = 30 * time.Second
+	maxLeaseExtendRetry = 3
+	retryUnlimited      = 0
 )
 
 var (
@@ -38,7 +40,6 @@ type Manager struct {
 	serviceType     zitimgmtv1.ServiceType
 	renewalInterval time.Duration
 	enrollTimeout   time.Duration
-	appCtx          context.Context
 
 	listenerFactory ListenerFactory
 	onNewListener   OnNewListener
@@ -50,7 +51,7 @@ type Manager struct {
 }
 
 func New(
-	appCtx context.Context,
+	ctx context.Context,
 	mgmtClient *zitimgmtclient.Client,
 	serviceType zitimgmtv1.ServiceType,
 	renewalInterval time.Duration,
@@ -58,8 +59,8 @@ func New(
 	listenerFactory ListenerFactory,
 	onNewListener OnNewListener,
 ) (*Manager, error) {
-	if appCtx == nil {
-		return nil, fmt.Errorf("app context is required")
+	if ctx == nil {
+		return nil, fmt.Errorf("context is required")
 	}
 	if mgmtClient == nil {
 		return nil, fmt.Errorf("ziti management client is required")
@@ -85,12 +86,11 @@ func New(
 		serviceType:     serviceType,
 		renewalInterval: renewalInterval,
 		enrollTimeout:   enrollTimeout,
-		appCtx:          appCtx,
 		listenerFactory: listenerFactory,
 		onNewListener:   onNewListener,
 	}
 
-	if err := manager.initialEnroll(appCtx); err != nil {
+	if err := manager.initialEnroll(ctx); err != nil {
 		return nil, err
 	}
 
@@ -98,10 +98,6 @@ func New(
 }
 
 func (m *Manager) RunLeaseRenewal(ctx context.Context) {
-	if ctx == nil {
-		ctx = m.appCtx
-	}
-
 	ticker := time.NewTicker(m.renewalInterval)
 	defer ticker.Stop()
 
@@ -130,6 +126,18 @@ func (m *Manager) RunLeaseRenewal(ctx context.Context) {
 	}
 }
 
+func (m *Manager) Close() {
+	m.mu.Lock()
+	oldCtx := m.zitiCtx
+	m.zitiCtx = nil
+	m.identityID = ""
+	m.mu.Unlock()
+
+	if oldCtx != nil {
+		oldCtx.Close()
+	}
+}
+
 func (m *Manager) initialEnroll(ctx context.Context) error {
 	zitiCtx, identityID, listener, err := m.enroll(ctx)
 	if err != nil {
@@ -153,7 +161,7 @@ func (m *Manager) extendLease(ctx context.Context) error {
 
 	err := retryWithBackoff(ctx, "extend ziti lease", func(err error) bool {
 		return !isNotFoundError(err)
-	}, func(attemptCtx context.Context) error {
+	}, maxLeaseExtendRetry, func(attemptCtx context.Context) error {
 		return m.mgmtClient.ExtendIdentityLease(attemptCtx, identityID)
 	})
 	if err == nil {
@@ -184,6 +192,8 @@ func (m *Manager) reEnroll(ctx context.Context) error {
 func (m *Manager) performReEnroll(ctx context.Context) error {
 	m.mu.Lock()
 	oldCtx := m.zitiCtx
+	m.zitiCtx = nil
+	m.identityID = ""
 	m.mu.Unlock()
 
 	if oldCtx != nil {
@@ -210,7 +220,7 @@ func (m *Manager) enroll(ctx context.Context) (ziti.Context, string, net.Listene
 
 	var identityID string
 	var identityJSON []byte
-	err := retryWithBackoff(enrollCtx, "ziti enrollment", nil, func(attemptCtx context.Context) error {
+	err := retryWithBackoff(enrollCtx, "ziti enrollment", nil, retryUnlimited, func(attemptCtx context.Context) error {
 		var requestErr error
 		identityID, identityJSON, requestErr = m.mgmtClient.RequestServiceIdentity(attemptCtx, m.serviceType)
 		return requestErr
@@ -270,7 +280,7 @@ func (m *Manager) reEnrollResult() error {
 	return m.reEnrollErr
 }
 
-func retryWithBackoff(ctx context.Context, operationName string, isRetryable func(error) bool, fn func(context.Context) error) error {
+func retryWithBackoff(ctx context.Context, operationName string, isRetryable func(error) bool, maxAttempts int, fn func(context.Context) error) error {
 	backoff := retryInitialBackoff
 	attempt := 1
 	for {
@@ -284,6 +294,10 @@ func retryWithBackoff(ctx context.Context, operationName string, isRetryable fun
 		}
 
 		if isRetryable != nil && !isRetryable(err) {
+			return err
+		}
+
+		if maxAttempts > 0 && attempt >= maxAttempts {
 			return err
 		}
 

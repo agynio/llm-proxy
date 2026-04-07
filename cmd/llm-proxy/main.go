@@ -141,6 +141,7 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("setup ziti manager: %w", err)
 		}
+		defer zitiManager.Close()
 
 		go zitiManager.RunLeaseRenewal(ctx)
 	}
