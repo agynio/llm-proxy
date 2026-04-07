@@ -79,12 +79,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read body", http.StatusBadRequest)
 		return
 	}
+	log.Printf("proxy: request body read method=%s path=%s size=%d", r.Method, r.URL.Path, len(body))
 
 	payload, modelID, stream, err := parseRequestPayload(body)
 	if err != nil {
+		rawModel := extractRawModelValue(body)
+		log.Printf("proxy: parse request failed err=%v raw_model=%s", err, rawModel)
 		writeProxyError(w, err)
 		return
 	}
+	log.Printf("proxy: parsed request model_id=%s stream=%t", modelID, stream)
 
 	resolvedModel, err := h.llmClient.ResolveModel(r.Context(), &llmv1.ResolveModelRequest{ModelId: modelID})
 	if err != nil {
@@ -93,11 +97,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	endpoint := strings.TrimRight(strings.TrimSpace(resolvedModel.GetEndpoint()), "/")
+	remoteName := strings.TrimSpace(resolvedModel.GetRemoteName())
+	log.Printf("proxy: resolved model remote_name=%s endpoint=%s", remoteName, endpoint)
 	if endpoint == "" {
 		writeProxyError(w, errors.New("provider endpoint is required"))
 		return
 	}
-	remoteName := strings.TrimSpace(resolvedModel.GetRemoteName())
 	if remoteName == "" {
 		writeProxyError(w, errors.New("remote model name is required"))
 		return
@@ -144,12 +149,13 @@ func (h *Handler) forwardResponse(w http.ResponseWriter, req *http.Request) {
 		writeProxyError(w, fmt.Errorf("send request: %w", err))
 		return
 	}
-	defer resp.Body.Close()
+	log.Printf("proxy: upstream response status=%d", resp.StatusCode)
+	defer closeResponseBody(resp.Body)
 
 	copyHeaders(w.Header(), resp.Header, nil)
 	w.WriteHeader(resp.StatusCode)
 	if _, err := io.Copy(w, resp.Body); err != nil {
-		log.Printf("forward response failed: %v", err)
+		log.Printf("proxy: forward response failed: %v", err)
 	}
 }
 
@@ -159,7 +165,8 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *ht
 		writeProxyError(w, fmt.Errorf("send request: %w", err))
 		return
 	}
-	defer resp.Body.Close()
+	log.Printf("proxy: upstream response status=%d", resp.StatusCode)
+	defer closeResponseBody(resp.Body)
 
 	copyHeaders(w.Header(), resp.Header, map[string]struct{}{"Content-Length": {}})
 	w.WriteHeader(resp.StatusCode)
@@ -168,7 +175,7 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *ht
 		return
 	}
 	if err := streamToClient(r.Context(), w, resp.Body); err != nil {
-		log.Printf("stream response failed: %v", err)
+		log.Printf("proxy: stream response failed: %v", err)
 	}
 }
 
@@ -206,6 +213,29 @@ func buildProviderRequest(ctx context.Context, endpoint string, token string, bo
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	return req, nil
+}
+
+func extractRawModelValue(body []byte) string {
+	if len(body) == 0 {
+		return ""
+	}
+	var payload map[string]json.RawMessage
+	if err := json.Unmarshal(body, &payload); err != nil {
+		return ""
+	}
+	rawModel, ok := payload["model"]
+	if !ok {
+		return ""
+	}
+	rawModel = bytes.TrimSpace(rawModel)
+	if len(rawModel) == 0 {
+		return ""
+	}
+	var modelStr string
+	if err := json.Unmarshal(rawModel, &modelStr); err == nil {
+		return strings.TrimSpace(modelStr)
+	}
+	return string(rawModel)
 }
 
 func parseRequestPayload(body []byte) (map[string]any, string, bool, error) {
@@ -269,9 +299,10 @@ func writeProxyError(w http.ResponseWriter, err error) {
 		}
 	}
 
+	log.Printf("proxy: error status=%d err=%v", statusCode, err)
+
 	message := err.Error()
 	if statusCode >= http.StatusInternalServerError {
-		log.Printf("proxy error: %v", err)
 		message = http.StatusText(statusCode)
 		if message == "" {
 			message = "server error"
@@ -319,6 +350,12 @@ func copyHeaders(dst, src http.Header, skip map[string]struct{}) {
 		for _, value := range values {
 			dst.Add(canonical, value)
 		}
+	}
+}
+
+func closeResponseBody(body io.Closer) {
+	if err := body.Close(); err != nil {
+		log.Printf("proxy: response body close failed: %v", err)
 	}
 }
 
