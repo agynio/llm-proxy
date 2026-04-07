@@ -9,10 +9,10 @@ import (
 type IdentityType string
 
 const (
-	IdentityTypeUser    IdentityType = "user"
-	IdentityTypeAgent   IdentityType = "agent"
-	IdentityTypeChannel IdentityType = "channel"
-	IdentityTypeRunner  IdentityType = "runner"
+	IdentityTypeUser   IdentityType = "user"
+	IdentityTypeAgent  IdentityType = "agent"
+	IdentityTypeApp    IdentityType = "app"
+	IdentityTypeRunner IdentityType = "runner"
 )
 
 type ResolvedIdentity struct {
@@ -27,8 +27,8 @@ func ParseIdentityType(value string) (IdentityType, error) {
 		return IdentityTypeUser, nil
 	case string(IdentityTypeAgent):
 		return IdentityTypeAgent, nil
-	case string(IdentityTypeChannel):
-		return IdentityTypeChannel, nil
+	case string(IdentityTypeApp):
+		return IdentityTypeApp, nil
 	case string(IdentityTypeRunner):
 		return IdentityTypeRunner, nil
 	default:
