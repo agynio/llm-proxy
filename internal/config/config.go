@@ -14,7 +14,7 @@ const (
 	defaultUsersServiceAddress   = "users:50051"
 	defaultAuthzServiceAddress   = "authorization:50051"
 	defaultZitiManagementAddress = "ziti-management:50051"
-	defaultZitiLeaseInterval     = 2 * time.Minute
+	defaultZitiLeaseInterval     = 1 * time.Minute
 	defaultZitiEnrollmentTimeout = 5 * time.Minute
 )
 
