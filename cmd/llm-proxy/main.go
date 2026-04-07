@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -10,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -23,16 +23,13 @@ import (
 	"github.com/agynio/llm-proxy/internal/grpcclient"
 	"github.com/agynio/llm-proxy/internal/proxy"
 	"github.com/agynio/llm-proxy/internal/ziticonn"
+	"github.com/agynio/llm-proxy/internal/zitimanager"
 	"github.com/agynio/llm-proxy/internal/zitimgmtclient"
 	"github.com/openziti/sdk-golang/ziti"
 	"google.golang.org/grpc"
 )
 
-const (
-	shutdownTimeout     = 10 * time.Second
-	retryInitialBackoff = 1 * time.Second
-	retryMaxBackoff     = 30 * time.Second
-)
+const shutdownTimeout = 10 * time.Second
 
 func main() {
 	if err := run(); err != nil {
@@ -107,43 +104,45 @@ func run() error {
 	}()
 
 	if cfg.ZitiEnabled {
-		enrollmentCtx, cancel := context.WithTimeout(ctx, cfg.ZitiEnrollmentTimeout)
-		defer cancel()
-
-		var zitiIdentityID string
-		var identityJSON []byte
-		if err := retryWithBackoff(enrollmentCtx, "ziti enrollment", func(attemptCtx context.Context) error {
-			var requestErr error
-			zitiIdentityID, identityJSON, requestErr = zitiMgmtClient.RequestServiceIdentity(attemptCtx, zitimgmtv1.ServiceType_SERVICE_TYPE_LLM_PROXY)
-			return requestErr
-		}); err != nil {
-			return fmt.Errorf("request ziti service identity: %w", err)
+		var listenerMu sync.Mutex
+		var currentListener net.Listener
+		listenerFactory := func(zitiCtx ziti.Context) (net.Listener, error) {
+			return zitiCtx.ListenWithOptions("llm-proxy", ziti.DefaultListenOptions())
 		}
+		onNewListener := func(listener net.Listener) {
+			listenerMu.Lock()
+			previousListener := currentListener
+			currentListener = listener
+			listenerMu.Unlock()
 
-		zitiConfig := &ziti.Config{}
-		if err := json.Unmarshal(identityJSON, zitiConfig); err != nil {
-			return fmt.Errorf("parse ziti identity: %w", err)
-		}
+			log.Printf("llm-proxy listening on ziti service llm-proxy")
+			go func(activeListener net.Listener) {
+				if err := server.Serve(activeListener); err != nil && !errors.Is(err, http.ErrServerClosed) && !errors.Is(err, net.ErrClosed) {
+					errCh <- fmt.Errorf("ziti server stopped: %w", err)
+				}
+			}(listener)
 
-		zitiContext, err := ziti.NewContext(zitiConfig)
-		if err != nil {
-			return fmt.Errorf("create ziti context: %w", err)
-		}
-		defer zitiContext.Close()
-
-		go renewLease(ctx, zitiMgmtClient, zitiIdentityID, cfg.ZitiLeaseRenewalInterval)
-
-		listener, err := zitiContext.ListenWithOptions("llm-proxy", ziti.DefaultListenOptions())
-		if err != nil {
-			return fmt.Errorf("listen on ziti service: %w", err)
-		}
-
-		log.Printf("llm-proxy listening on ziti service llm-proxy")
-		go func() {
-			if err := server.Serve(listener); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				errCh <- fmt.Errorf("ziti server stopped: %w", err)
+			if previousListener != nil {
+				if err := previousListener.Close(); err != nil {
+					log.Printf("failed to close previous ziti listener: %v", err)
+				}
 			}
-		}()
+		}
+
+		zitiManager, err := zitimanager.New(
+			ctx,
+			zitiMgmtClient,
+			zitimgmtv1.ServiceType_SERVICE_TYPE_LLM_PROXY,
+			cfg.ZitiLeaseRenewalInterval,
+			cfg.ZitiEnrollmentTimeout,
+			listenerFactory,
+			onNewListener,
+		)
+		if err != nil {
+			return fmt.Errorf("setup ziti manager: %w", err)
+		}
+
+		go zitiManager.RunLeaseRenewal(ctx)
 	}
 
 	select {
@@ -160,60 +159,6 @@ func run() error {
 	}
 
 	return nil
-}
-
-func renewLease(ctx context.Context, client *zitimgmtclient.Client, identityID string, interval time.Duration) {
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case <-ticker.C:
-			if ctx.Err() != nil {
-				return
-			}
-			if err := client.ExtendIdentityLease(ctx, identityID); err != nil {
-				log.Printf("failed to extend ziti lease: %v", err)
-			}
-		}
-	}
-}
-
-func retryWithBackoff(ctx context.Context, operationName string, fn func(context.Context) error) error {
-	backoff := retryInitialBackoff
-	attempt := 1
-	for {
-		err := fn(ctx)
-		if err == nil {
-			return nil
-		}
-
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-
-		delay := backoff
-		if delay > retryMaxBackoff {
-			delay = retryMaxBackoff
-		}
-
-		log.Printf("%s failed (attempt %d), retrying in %s: %v", operationName, attempt, delay, err)
-
-		timer := time.NewTimer(delay)
-		select {
-		case <-ctx.Done():
-			timer.Stop()
-			return ctx.Err()
-		case <-timer.C:
-		}
-
-		backoff *= 2
-		if backoff > retryMaxBackoff {
-			backoff = retryMaxBackoff
-		}
-		attempt++
-	}
 }
 
 func mustClient[T any](target, name string, factory func(grpc.ClientConnInterface) T, cleanup *[]func()) T {
