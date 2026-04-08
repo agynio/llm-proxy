@@ -75,6 +75,11 @@ func TestSourceIdentityFromConnDialerPreferredOverSource(t *testing.T) {
 	assertSourceIdentity(t, conn, "dialer-id", true)
 }
 
+func TestSourceIdentityFromConnBothEmptyReturnsFalse(t *testing.T) {
+	conn := dialerSourceConn{dialerID: "", sourceID: ""}
+	assertSourceIdentity(t, conn, "", false)
+}
+
 func assertSourceIdentity(t *testing.T, conn net.Conn, want string, wantOK bool) {
 	t.Helper()
 
