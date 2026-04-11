@@ -265,7 +265,118 @@ func TestHandlerForwardAnthropicMessages(t *testing.T) {
 	}
 }
 
-func TestHandlerProtocolMismatch(t *testing.T) {
+func TestHandlerMessagesWithoutAnthropicVersion(t *testing.T) {
+	modelID := uuid.New()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/messages" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "" {
+			t.Fatalf("unexpected authorization header %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("X-Api-Key") != "provider-token" {
+			t.Fatalf("unexpected x-api-key header %q", r.Header.Get("X-Api-Key"))
+		}
+		if r.Header.Get("Anthropic-Version") != "" {
+			t.Fatalf("unexpected anthropic-version header %q", r.Header.Get("Anthropic-Version"))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL + "/messages",
+		Token:          "provider-token",
+		RemoteName:     "claude-3",
+		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_ANTHROPIC_MESSAGES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_X_API_KEY,
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+
+	handler := NewHandler(llmClient, authzClient, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `","stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", strings.NewReader(body))
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.Code)
+	}
+}
+
+func TestHandlerMessagesStream(t *testing.T) {
+	modelID := uuid.New()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Accept") != "text/event-stream" {
+			t.Fatalf("expected event-stream accept header")
+		}
+		if r.Header.Get("X-Api-Key") != "provider-token" {
+			t.Fatalf("unexpected x-api-key header %q", r.Header.Get("X-Api-Key"))
+		}
+		if r.Header.Get("Anthropic-Version") != "2023-06-01" {
+			t.Fatalf("unexpected anthropic-version header %q", r.Header.Get("Anthropic-Version"))
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read provider body: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("unmarshal provider body: %v", err)
+		}
+		if payload["stream"] != true {
+			t.Fatalf("expected stream true, got %v", payload["stream"])
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Content-Length", "123")
+		w.Header().Set("X-Provider", "stream")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("data: hello\n\n"))
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL + "/messages",
+		Token:          "provider-token",
+		RemoteName:     "claude-3",
+		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_ANTHROPIC_MESSAGES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_X_API_KEY,
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+	handler := NewHandler(llmClient, authzClient, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `","stream":true}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", strings.NewReader(body))
+	req.Header.Set("anthropic-version", "2023-06-01")
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.Code)
+	}
+	if resp.Header().Get("Content-Length") != "" {
+		t.Fatalf("expected content-length to be omitted")
+	}
+	if resp.Header().Get("X-Provider") != "stream" {
+		t.Fatalf("expected provider header")
+	}
+	if strings.TrimSpace(resp.Body.String()) != "data: hello" {
+		t.Fatalf("unexpected response body: %s", resp.Body.String())
+	}
+}
+
+func TestHandlerProtocolMismatchMessagesWithResponses(t *testing.T) {
 	modelID := uuid.New()
 	providerCalled := false
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -288,6 +399,80 @@ func TestHandlerProtocolMismatch(t *testing.T) {
 
 	body := `{"model":"` + modelID.String() + `"}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", strings.NewReader(body))
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, resp.Code)
+	}
+	if providerCalled {
+		t.Fatalf("expected provider not to be called")
+	}
+}
+
+func TestHandlerProtocolMismatchResponsesWithAnthropic(t *testing.T) {
+	modelID := uuid.New()
+	providerCalled := false
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL + "/responses",
+		Token:          "provider-token",
+		RemoteName:     "remote-model",
+		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_ANTHROPIC_MESSAGES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_X_API_KEY,
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+
+	handler := NewHandler(llmClient, authzClient, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, resp.Code)
+	}
+	if providerCalled {
+		t.Fatalf("expected provider not to be called")
+	}
+}
+
+func TestHandlerUnsupportedAuthMethod(t *testing.T) {
+	modelID := uuid.New()
+	providerCalled := false
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL + "/responses",
+		Token:          "provider-token",
+		RemoteName:     "remote-model",
+		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_UNSPECIFIED,
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+
+	handler := NewHandler(llmClient, authzClient, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
 	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
 	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()

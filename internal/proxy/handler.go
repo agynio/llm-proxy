@@ -347,9 +347,7 @@ func writeProxyError(w http.ResponseWriter, err error) {
 		statusCode = grpcStatusToHTTP(grpcStatus.Code())
 	} else {
 		switch {
-		case errors.Is(err, ErrInvalidBody), errors.Is(err, ErrMissingModel):
-			statusCode = http.StatusBadRequest
-		case errors.Is(err, ErrProtocolMismatch):
+		case errors.Is(err, ErrInvalidBody), errors.Is(err, ErrMissingModel), errors.Is(err, ErrProtocolMismatch), errors.Is(err, ErrUnsupportedAuthMethod):
 			statusCode = http.StatusBadRequest
 		case errors.Is(err, ErrMissingIdentity):
 			statusCode = http.StatusUnauthorized
