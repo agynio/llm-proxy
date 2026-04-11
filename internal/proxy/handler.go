@@ -21,13 +21,19 @@ import (
 )
 
 var (
-	ErrInvalidBody     = errors.New("invalid body")
-	ErrMissingModel    = errors.New("model is required")
-	ErrMissingIdentity = errors.New("identity is required")
-	ErrForbidden       = errors.New("access denied")
+	ErrInvalidBody           = errors.New("invalid body")
+	ErrMissingModel          = errors.New("model is required")
+	ErrMissingIdentity       = errors.New("identity is required")
+	ErrForbidden             = errors.New("access denied")
+	ErrProtocolMismatch      = errors.New("protocol mismatch")
+	ErrUnsupportedAuthMethod = errors.New("unsupported auth method")
 )
 
-const maxRequestBodySize int64 = 1 << 20
+const (
+	maxRequestBodySize int64 = 1 << 20
+	responsesPath            = "/v1/responses"
+	messagesPath             = "/v1/messages"
+)
 
 type ModelResolver interface {
 	ResolveModel(ctx context.Context, req *llmv1.ResolveModelRequest, opts ...grpc.CallOption) (*llmv1.ResolveModelResponse, error)
@@ -57,7 +63,8 @@ func NewHandler(llmClient ModelResolver, authzClient AuthorizationChecker, clien
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Path != "/v1/responses" {
+	expectedProtocol, ok := protocolForPath(r.URL.Path)
+	if !ok {
 		http.NotFound(w, r)
 		return
 	}
@@ -96,40 +103,26 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	endpoint := strings.TrimRight(strings.TrimSpace(resolvedModel.GetEndpoint()), "/")
-	remoteName := strings.TrimSpace(resolvedModel.GetRemoteName())
-	log.Printf("proxy: resolved model remote_name=%s endpoint=%s", remoteName, endpoint)
-	if endpoint == "" {
-		writeProxyError(w, errors.New("provider endpoint is required"))
+	providerConfig, err := parseProviderConfig(resolvedModel, expectedProtocol)
+	if err != nil {
+		writeProxyError(w, err)
 		return
 	}
-	if remoteName == "" {
-		writeProxyError(w, errors.New("remote model name is required"))
-		return
-	}
-	token := strings.TrimSpace(resolvedModel.GetToken())
-	if token == "" {
-		writeProxyError(w, errors.New("provider token is required"))
-		return
-	}
-	organizationID := strings.TrimSpace(resolvedModel.GetOrganizationId())
-	if organizationID == "" {
-		writeProxyError(w, errors.New("organization id is required"))
-		return
-	}
+	log.Printf("proxy: resolved model remote_name=%s endpoint=%s", providerConfig.remoteName, providerConfig.endpoint)
 
-	if err := h.authorizeRequest(r.Context(), resolvedIdentity, organizationID); err != nil {
+	if err := h.authorizeRequest(r.Context(), resolvedIdentity, providerConfig.organizationID); err != nil {
 		writeProxyError(w, err)
 		return
 	}
 
-	updatedBody, err := updateRequestPayload(payload, remoteName, stream)
+	updatedBody, err := updateRequestPayload(payload, providerConfig.remoteName, stream)
 	if err != nil {
 		writeProxyError(w, err)
 		return
 	}
 
-	providerReq, err := buildProviderRequest(r.Context(), endpoint, token, updatedBody, stream)
+	anthropicVersion := strings.TrimSpace(r.Header.Get("anthropic-version"))
+	providerReq, err := buildProviderRequest(r.Context(), providerConfig.endpoint, providerConfig.token, updatedBody, stream, providerConfig.authMethod, anthropicVersion)
 	if err != nil {
 		writeProxyError(w, err)
 		return
@@ -199,7 +192,61 @@ func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.Resolv
 	return nil
 }
 
-func buildProviderRequest(ctx context.Context, endpoint string, token string, body []byte, stream bool) (*http.Request, error) {
+type providerConfig struct {
+	endpoint       string
+	token          string
+	remoteName     string
+	organizationID string
+	authMethod     llmv1.AuthMethod
+}
+
+func protocolForPath(path string) (llmv1.Protocol, bool) {
+	switch path {
+	case responsesPath:
+		return llmv1.Protocol_PROTOCOL_RESPONSES, true
+	case messagesPath:
+		return llmv1.Protocol_PROTOCOL_ANTHROPIC_MESSAGES, true
+	default:
+		return llmv1.Protocol_PROTOCOL_UNSPECIFIED, false
+	}
+}
+
+func parseProviderConfig(resolved *llmv1.ResolveModelResponse, expectedProtocol llmv1.Protocol) (providerConfig, error) {
+	endpoint := strings.TrimSpace(resolved.GetEndpoint())
+	if endpoint == "" {
+		return providerConfig{}, errors.New("provider endpoint is required")
+	}
+	remoteName := strings.TrimSpace(resolved.GetRemoteName())
+	if remoteName == "" {
+		return providerConfig{}, errors.New("remote model name is required")
+	}
+	token := strings.TrimSpace(resolved.GetToken())
+	if token == "" {
+		return providerConfig{}, errors.New("provider token is required")
+	}
+	organizationID := strings.TrimSpace(resolved.GetOrganizationId())
+	if organizationID == "" {
+		return providerConfig{}, errors.New("organization id is required")
+	}
+	if resolved.GetProtocol() != expectedProtocol {
+		return providerConfig{}, fmt.Errorf("%w: expected %s got %s", ErrProtocolMismatch, expectedProtocol, resolved.GetProtocol())
+	}
+	authMethod := resolved.GetAuthMethod()
+	switch authMethod {
+	case llmv1.AuthMethod_AUTH_METHOD_BEARER, llmv1.AuthMethod_AUTH_METHOD_X_API_KEY:
+		return providerConfig{
+			endpoint:       endpoint,
+			token:          token,
+			remoteName:     remoteName,
+			organizationID: organizationID,
+			authMethod:     authMethod,
+		}, nil
+	default:
+		return providerConfig{}, fmt.Errorf("%w: %s", ErrUnsupportedAuthMethod, authMethod)
+	}
+}
+
+func buildProviderRequest(ctx context.Context, endpoint string, token string, body []byte, stream bool, authMethod llmv1.AuthMethod, anthropicVersion string) (*http.Request, error) {
 	url := endpoint
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
@@ -210,7 +257,17 @@ func buildProviderRequest(ctx context.Context, endpoint string, token string, bo
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
 	}
-	req.Header.Set("Authorization", "Bearer "+token)
+	switch authMethod {
+	case llmv1.AuthMethod_AUTH_METHOD_BEARER:
+		req.Header.Set("Authorization", "Bearer "+token)
+	case llmv1.AuthMethod_AUTH_METHOD_X_API_KEY:
+		req.Header.Set("x-api-key", token)
+		if anthropicVersion != "" {
+			req.Header.Set("anthropic-version", anthropicVersion)
+		}
+	default:
+		return nil, ErrUnsupportedAuthMethod
+	}
 
 	return req, nil
 }
@@ -291,6 +348,8 @@ func writeProxyError(w http.ResponseWriter, err error) {
 	} else {
 		switch {
 		case errors.Is(err, ErrInvalidBody), errors.Is(err, ErrMissingModel):
+			statusCode = http.StatusBadRequest
+		case errors.Is(err, ErrProtocolMismatch):
 			statusCode = http.StatusBadRequest
 		case errors.Is(err, ErrMissingIdentity):
 			statusCode = http.StatusUnauthorized

@@ -102,6 +102,8 @@ func TestHandlerForwardNonStream(t *testing.T) {
 		Token:          "provider-token",
 		RemoteName:     "remote-model",
 		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
 
@@ -168,6 +170,8 @@ func TestHandlerForwardStream(t *testing.T) {
 		Token:          "provider-token",
 		RemoteName:     "remote-model",
 		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
 	handler := NewHandler(llmClient, authzClient, provider.Client())
@@ -194,6 +198,110 @@ func TestHandlerForwardStream(t *testing.T) {
 	}
 }
 
+func TestHandlerForwardAnthropicMessages(t *testing.T) {
+	modelID := uuid.New()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/messages" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "" {
+			t.Fatalf("unexpected authorization header %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("X-Api-Key") != "provider-token" {
+			t.Fatalf("unexpected x-api-key header %q", r.Header.Get("X-Api-Key"))
+		}
+		if r.Header.Get("Anthropic-Version") != "2023-06-01" {
+			t.Fatalf("unexpected anthropic-version header %q", r.Header.Get("Anthropic-Version"))
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("unexpected content type %q", r.Header.Get("Content-Type"))
+		}
+		if got := r.Header.Get("Accept"); got != "" {
+			t.Fatalf("unexpected accept header %q", got)
+		}
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read provider body: %v", err)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal(body, &payload); err != nil {
+			t.Fatalf("unmarshal provider body: %v", err)
+		}
+		if payload["model"] != "claude-3" {
+			t.Fatalf("expected model claude-3, got %v", payload["model"])
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL + "/messages",
+		Token:          "provider-token",
+		RemoteName:     "claude-3",
+		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_ANTHROPIC_MESSAGES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_X_API_KEY,
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+
+	handler := NewHandler(llmClient, authzClient, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `","stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", strings.NewReader(body))
+	req.Header.Set("anthropic-version", "2023-06-01")
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.Code)
+	}
+	if strings.TrimSpace(resp.Body.String()) != `{"ok":true}` {
+		t.Fatalf("unexpected response body: %s", resp.Body.String())
+	}
+}
+
+func TestHandlerProtocolMismatch(t *testing.T) {
+	modelID := uuid.New()
+	providerCalled := false
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalled = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL + "/messages",
+		Token:          "provider-token",
+		RemoteName:     "claude-3",
+		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+
+	handler := NewHandler(llmClient, authzClient, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", strings.NewReader(body))
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusBadRequest {
+		t.Fatalf("expected status %d, got %d", http.StatusBadRequest, resp.Code)
+	}
+	if providerCalled {
+		t.Fatalf("expected provider not to be called")
+	}
+}
+
 func TestHandlerForbidden(t *testing.T) {
 	modelID := uuid.New()
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -207,6 +315,8 @@ func TestHandlerForbidden(t *testing.T) {
 		Token:          "provider-token",
 		RemoteName:     "remote-model",
 		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: false}}
 	handler := NewHandler(llmClient, authzClient, provider.Client())
@@ -250,6 +360,17 @@ func TestHandlerRouteHandling(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, getResp.Code)
 	}
 	if allow := getResp.Header().Get("Allow"); allow != http.MethodPost {
+		t.Fatalf("expected allow header %q, got %q", http.MethodPost, allow)
+	}
+
+	getMessagesReq := httptest.NewRequest(http.MethodGet, "http://example.com/v1/messages", nil)
+	getMessagesResp := httptest.NewRecorder()
+	handler.ServeHTTP(getMessagesResp, getMessagesReq)
+
+	if getMessagesResp.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected status %d, got %d", http.StatusMethodNotAllowed, getMessagesResp.Code)
+	}
+	if allow := getMessagesResp.Header().Get("Allow"); allow != http.MethodPost {
 		t.Fatalf("expected allow header %q, got %q", http.MethodPost, allow)
 	}
 
@@ -312,6 +433,8 @@ func TestHandlerProviderErrorForwardingNonStream(t *testing.T) {
 		Token:          "provider-token",
 		RemoteName:     "remote-model",
 		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
 	handler := NewHandler(llmClient, authzClient, provider.Client())
@@ -346,6 +469,8 @@ func TestHandlerProviderErrorForwardingStream(t *testing.T) {
 		Token:          "provider-token",
 		RemoteName:     "remote-model",
 		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
 	handler := NewHandler(llmClient, authzClient, provider.Client())
