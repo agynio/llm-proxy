@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"net/http"
-	"strings"
 
 	"github.com/agynio/llm-proxy/internal/apitokenresolver"
 	"github.com/agynio/llm-proxy/internal/httpauth"
@@ -27,13 +26,7 @@ func Middleware(zitiResolver IdentityResolver, apiTokenResolver BearerTokenResol
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			ctx, err := resolveIdentity(
-				r.Context(),
-				r.Header.Get("Authorization"),
-				r.Header.Get("x-api-key"),
-				zitiResolver,
-				apiTokenResolver,
-			)
+			ctx, err := resolveIdentity(r.Context(), r.Header.Get("Authorization"), zitiResolver, apiTokenResolver)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusUnauthorized)
 				return
@@ -44,7 +37,7 @@ func Middleware(zitiResolver IdentityResolver, apiTokenResolver BearerTokenResol
 	}
 }
 
-func resolveIdentity(ctx context.Context, authHeader string, apiKeyHeader string, zitiResolver IdentityResolver, apiTokenResolver BearerTokenResolver) (context.Context, error) {
+func resolveIdentity(ctx context.Context, authHeader string, zitiResolver IdentityResolver, apiTokenResolver BearerTokenResolver) (context.Context, error) {
 	sourceIdentity, ok := ziticonn.SourceIdentityFromContext(ctx)
 	if ok {
 		if zitiResolver == nil {
@@ -58,10 +51,6 @@ func resolveIdentity(ctx context.Context, authHeader string, apiKeyHeader string
 	}
 
 	accessToken, ok := httpauth.ExtractBearerToken(authHeader)
-	if !ok {
-		accessToken = strings.TrimSpace(apiKeyHeader)
-		ok = accessToken != ""
-	}
 	if !ok {
 		return ctx, errors.New("authorization required")
 	}
