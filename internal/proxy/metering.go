@@ -132,10 +132,6 @@ func parseUsageFromEvent(protocol llmv1.Protocol, eventType string, data string)
 }
 
 func (h *Handler) recordMetering(meta meteringMetadata, usage *usageCounts, status string) {
-	if h.meteringClient == nil {
-		return
-	}
-
 	records := buildUsageRecords(meta, usage, status)
 	if len(records) == 0 {
 		return
