@@ -15,6 +15,7 @@ import (
 
 	authorizationv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/authorization/v1"
 	llmv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/llm/v1"
+	meteringv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/metering/v1"
 	usersv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/users/v1"
 	zitimgmtv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/ziti_management/v1"
 	"github.com/agynio/llm-proxy/internal/apitokenresolver"
@@ -56,6 +57,7 @@ func run() error {
 	llmClient := mustClient(cfg.LLMServiceAddress, "llm", llmv1.NewLLMServiceClient, &cleanup)
 	authzClient := mustClient(cfg.AuthorizationServiceAddress, "authorization", authorizationv1.NewAuthorizationServiceClient, &cleanup)
 	usersClient := mustClient(cfg.UsersServiceAddress, "users", usersv1.NewUsersServiceClient, &cleanup)
+	meteringClient := mustClient(cfg.MeteringServiceAddress, "metering", meteringv1.NewMeteringServiceClient, &cleanup)
 
 	apiTokenResolver := apitokenresolver.NewResolver(usersClient)
 
@@ -77,7 +79,7 @@ func run() error {
 		zitiResolver = zitiMgmtClient
 	}
 
-	proxyHandler := proxy.NewHandler(llmClient, authzClient, &http.Client{})
+	proxyHandler := proxy.NewHandler(llmClient, authzClient, meteringClient, &http.Client{})
 	handler := auth.Middleware(zitiResolver, apiTokenResolver)(proxyHandler)
 
 	connContext := func(ctx context.Context, conn net.Conn) context.Context {
