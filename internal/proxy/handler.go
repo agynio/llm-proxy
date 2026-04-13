@@ -185,9 +185,7 @@ func (h *Handler) forwardResponse(w http.ResponseWriter, req *http.Request, meta
 		h.recordMetering(meta, nil, meteringStatusSuccess)
 		return
 	}
-	var usagePtr *usageCounts
-	usagePtr = &usage
-	h.recordMetering(meta, usagePtr, meteringStatusSuccess)
+	h.recordMetering(meta, &usage, meteringStatusSuccess)
 }
 
 func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *http.Request, protocol llmv1.Protocol, meta meteringMetadata) {
