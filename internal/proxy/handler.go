@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -44,22 +45,26 @@ type AuthorizationChecker interface {
 }
 
 type Handler struct {
-	llmClient   ModelResolver
-	authzClient AuthorizationChecker
-	client      *http.Client
+	llmClient      ModelResolver
+	authzClient    AuthorizationChecker
+	meteringClient MeteringRecorder
+	client         *http.Client
 }
 
-func NewHandler(llmClient ModelResolver, authzClient AuthorizationChecker, client *http.Client) http.Handler {
+func NewHandler(llmClient ModelResolver, authzClient AuthorizationChecker, meteringClient MeteringRecorder, client *http.Client) http.Handler {
 	if llmClient == nil {
 		panic("llm client is required")
 	}
 	if authzClient == nil {
 		panic("authorization client is required")
 	}
+	if meteringClient == nil {
+		panic("metering client is required")
+	}
 	if client == nil {
 		panic("http client is required")
 	}
-	return &Handler{llmClient: llmClient, authzClient: authzClient, client: client}
+	return &Handler{llmClient: llmClient, authzClient: authzClient, meteringClient: meteringClient, client: client}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -79,6 +84,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeProxyError(w, ErrMissingIdentity)
 		return
 	}
+	threadID := strings.TrimSpace(r.Header.Get("x-agyn-thread-id"))
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 	body, err := io.ReadAll(r.Body)
@@ -115,6 +121,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	meteringMeta := meteringMetadata{
+		callID:    uuid.NewString(),
+		orgID:     providerConfig.organizationID,
+		modelID:   modelID,
+		modelName: providerConfig.remoteName,
+		threadID:  threadID,
+		identity:  resolvedIdentity,
+	}
+
 	updatedBody, err := updateRequestPayload(payload, providerConfig.remoteName, stream)
 	if err != nil {
 		writeProxyError(w, err)
@@ -129,32 +144,54 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if stream {
-		h.streamResponse(w, r, providerReq)
+		h.streamResponse(w, r, providerReq, expectedProtocol, meteringMeta)
 		return
 	}
 
-	h.forwardResponse(w, providerReq)
+	h.forwardResponse(w, providerReq, meteringMeta)
 }
 
-func (h *Handler) forwardResponse(w http.ResponseWriter, req *http.Request) {
+func (h *Handler) forwardResponse(w http.ResponseWriter, req *http.Request, meta meteringMetadata) {
 	resp, err := h.client.Do(req)
 	if err != nil {
+		h.recordMetering(meta, nil, meteringStatusFailed)
 		writeProxyError(w, fmt.Errorf("send request: %w", err))
 		return
 	}
 	log.Printf("proxy: upstream response status=%d", resp.StatusCode)
 	defer closeResponseBody(resp.Body)
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		h.recordMetering(meta, nil, meteringStatusFailed)
+		writeProxyError(w, fmt.Errorf("read response: %w", err))
+		return
+	}
+
 	copyHeaders(w.Header(), resp.Header, nil)
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil {
+	if _, err := w.Write(body); err != nil {
 		log.Printf("proxy: forward response failed: %v", err)
 	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		h.recordMetering(meta, nil, meteringStatusFailed)
+		return
+	}
+
+	usage, err := parseUsageFromPayload(body)
+	if err != nil {
+		log.Printf("proxy: metering usage parse failed: %v", err)
+		h.recordMetering(meta, nil, meteringStatusSuccess)
+		return
+	}
+	h.recordMetering(meta, &usage, meteringStatusSuccess)
 }
 
-func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *http.Request) {
+func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *http.Request, protocol llmv1.Protocol, meta meteringMetadata) {
 	resp, err := h.client.Do(req)
 	if err != nil {
+		h.recordMetering(meta, nil, meteringStatusFailed)
 		writeProxyError(w, fmt.Errorf("send request: %w", err))
 		return
 	}
@@ -165,11 +202,21 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *ht
 	w.WriteHeader(resp.StatusCode)
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		_, _ = io.Copy(w, resp.Body)
+		h.recordMetering(meta, nil, meteringStatusFailed)
 		return
 	}
-	if err := streamToClient(r.Context(), w, resp.Body); err != nil {
+	usage, err := streamToClient(r.Context(), w, resp.Body, protocol)
+	if err != nil {
 		log.Printf("proxy: stream response failed: %v", err)
+		h.recordMetering(meta, nil, meteringStatusFailed)
+		return
 	}
+	if usage == nil {
+		log.Printf("proxy: metering usage missing for streaming response")
+		h.recordMetering(meta, nil, meteringStatusSuccess)
+		return
+	}
+	h.recordMetering(meta, usage, meteringStatusSuccess)
 }
 
 func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.ResolvedIdentity, organizationID string) error {
@@ -416,28 +463,58 @@ func closeResponseBody(body io.Closer) {
 	}
 }
 
-func streamToClient(ctx context.Context, w http.ResponseWriter, body io.Reader) error {
+func streamToClient(ctx context.Context, w http.ResponseWriter, body io.Reader, protocol llmv1.Protocol) (*usageCounts, error) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
-		return errors.New("streaming unsupported")
+		return nil, errors.New("streaming unsupported")
 	}
-	buffer := make([]byte, 32*1024)
+	reader := bufio.NewReader(body)
+	var usage *usageCounts
+	var eventType string
+	var dataLines []string
+
+	processEvent := func() {
+		if len(dataLines) == 0 {
+			eventType = ""
+			return
+		}
+		data := strings.Join(dataLines, "\n")
+		parsed, matched, err := parseUsageFromEvent(protocol, eventType, data)
+		if err != nil {
+			log.Printf("proxy: metering usage parse failed: %v", err)
+		} else if matched {
+			usage = &parsed
+		}
+		eventType = ""
+		dataLines = nil
+	}
+
 	for {
 		if ctx.Err() != nil {
-			return ctx.Err()
+			return nil, ctx.Err()
 		}
-		n, err := body.Read(buffer)
-		if n > 0 {
-			if _, writeErr := w.Write(buffer[:n]); writeErr != nil {
-				return writeErr
+		line, err := reader.ReadString('\n')
+		if len(line) > 0 {
+			if _, writeErr := w.Write([]byte(line)); writeErr != nil {
+				return nil, writeErr
 			}
 			flusher.Flush()
+
+			trimmed := strings.TrimRight(line, "\r\n")
+			if trimmed == "" {
+				processEvent()
+			} else if strings.HasPrefix(trimmed, "event:") {
+				eventType = strings.TrimSpace(strings.TrimPrefix(trimmed, "event:"))
+			} else if strings.HasPrefix(trimmed, "data:") {
+				dataLines = append(dataLines, strings.TrimSpace(strings.TrimPrefix(trimmed, "data:")))
+			}
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				return nil
+				processEvent()
+				return usage, nil
 			}
-			return err
+			return usage, err
 		}
 	}
 }

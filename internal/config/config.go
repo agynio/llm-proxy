@@ -9,13 +9,14 @@ import (
 )
 
 const (
-	defaultListenAddress         = ":8080"
-	defaultLLMServiceAddress     = "llm:50051"
-	defaultUsersServiceAddress   = "users:50051"
-	defaultAuthzServiceAddress   = "authorization:50051"
-	defaultZitiManagementAddress = "ziti-management:50051"
-	defaultZitiLeaseInterval     = 2 * time.Minute
-	defaultZitiEnrollmentTimeout = 5 * time.Minute
+	defaultListenAddress          = ":8080"
+	defaultLLMServiceAddress      = "llm:50051"
+	defaultUsersServiceAddress    = "users:50051"
+	defaultAuthzServiceAddress    = "authorization:50051"
+	defaultMeteringServiceAddress = "metering:50051"
+	defaultZitiManagementAddress  = "ziti-management:50051"
+	defaultZitiLeaseInterval      = 2 * time.Minute
+	defaultZitiEnrollmentTimeout  = 5 * time.Minute
 )
 
 type Config struct {
@@ -23,6 +24,7 @@ type Config struct {
 	LLMServiceAddress           string
 	UsersServiceAddress         string
 	AuthorizationServiceAddress string
+	MeteringServiceAddress      string
 	ZitiManagementAddress       string
 	ZitiEnabled                 bool
 	ZitiLeaseRenewalInterval    time.Duration
@@ -56,6 +58,7 @@ func LoadConfigFromEnv() (*Config, error) {
 		LLMServiceAddress:           envOrDefault("LLM_SERVICE_ADDRESS", defaultLLMServiceAddress),
 		UsersServiceAddress:         envOrDefault("USERS_SERVICE_ADDRESS", defaultUsersServiceAddress),
 		AuthorizationServiceAddress: envOrDefault("AUTHORIZATION_SERVICE_ADDRESS", defaultAuthzServiceAddress),
+		MeteringServiceAddress:      envOrDefault("METERING_SERVICE_ADDRESS", defaultMeteringServiceAddress),
 		ZitiManagementAddress:       envOrDefault("ZITI_MANAGEMENT_ADDRESS", defaultZitiManagementAddress),
 		ZitiEnabled:                 zitiEnabled,
 		ZitiLeaseRenewalInterval:    zitiLeaseRenewalInterval,
