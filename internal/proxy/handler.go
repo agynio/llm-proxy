@@ -116,7 +116,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	log.Printf("proxy: resolved model remote_name=%s endpoint=%s", providerConfig.remoteName, providerConfig.endpoint)
 
-	if err := h.authorizeRequest(r.Context(), resolvedIdentity, providerConfig.organizationID); err != nil {
+	if err := h.authorizeRequest(r.Context(), resolvedIdentity, modelID); err != nil {
 		writeProxyError(w, err)
 		return
 	}
@@ -219,14 +219,14 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *ht
 	h.recordMetering(meta, usage, meteringStatusSuccess)
 }
 
-func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.ResolvedIdentity, organizationID string) error {
+func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.ResolvedIdentity, modelID string) error {
 	user := fmt.Sprintf("identity:%s", resolved.IdentityID)
-	object := fmt.Sprintf("organization:%s", organizationID)
+	object := fmt.Sprintf("model:%s", modelID)
 
 	resp, err := h.authzClient.Check(ctx, &authorizationv1.CheckRequest{
 		TupleKey: &authorizationv1.TupleKey{
 			User:     user,
-			Relation: "member",
+			Relation: "can_use",
 			Object:   object,
 		},
 	})
