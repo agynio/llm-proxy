@@ -142,7 +142,10 @@ func TestHandlerForwardNonStream(t *testing.T) {
 	if authzClient.lastReq.GetTupleKey().GetUser() != "identity:user-1" {
 		t.Fatalf("unexpected authz user %q", authzClient.lastReq.GetTupleKey().GetUser())
 	}
-	if authzClient.lastReq.GetTupleKey().GetObject() != "organization:org-1" {
+	if authzClient.lastReq.GetTupleKey().GetRelation() != "can_use" {
+		t.Fatalf("unexpected authz relation %q", authzClient.lastReq.GetTupleKey().GetRelation())
+	}
+	if authzClient.lastReq.GetTupleKey().GetObject() != "model:"+modelID.String() {
 		t.Fatalf("unexpected authz object %q", authzClient.lastReq.GetTupleKey().GetObject())
 	}
 }
