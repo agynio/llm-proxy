@@ -136,8 +136,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	anthropicVersion := strings.TrimSpace(r.Header.Get("anthropic-version"))
-	providerReq, err := buildProviderRequest(r.Context(), providerConfig.endpoint, providerConfig.token, updatedBody, stream, providerConfig.authMethod, anthropicVersion)
+	providerReq, err := buildProviderRequest(r.Context(), providerConfig.endpoint, providerConfig.token, updatedBody, stream, providerConfig.authMethod, r.Header)
 	if err != nil {
 		writeProxyError(w, err)
 		return
@@ -293,13 +292,14 @@ func parseProviderConfig(resolved *llmv1.ResolveModelResponse, expectedProtocol 
 	}
 }
 
-func buildProviderRequest(ctx context.Context, endpoint string, token string, body []byte, stream bool, authMethod llmv1.AuthMethod, anthropicVersion string) (*http.Request, error) {
+func buildProviderRequest(ctx context.Context, endpoint string, token string, body []byte, stream bool, authMethod llmv1.AuthMethod, callerHeaders http.Header) (*http.Request, error) {
 	url := endpoint
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 
+	copyProviderRequestHeaders(req.Header, callerHeaders)
 	req.Header.Set("Content-Type", "application/json")
 	if stream {
 		req.Header.Set("Accept", "text/event-stream")
@@ -309,14 +309,38 @@ func buildProviderRequest(ctx context.Context, endpoint string, token string, bo
 		req.Header.Set("Authorization", "Bearer "+token)
 	case llmv1.AuthMethod_AUTH_METHOD_X_API_KEY:
 		req.Header.Set("x-api-key", token)
-		if anthropicVersion != "" {
-			req.Header.Set("anthropic-version", anthropicVersion)
-		}
 	default:
 		return nil, ErrUnsupportedAuthMethod
 	}
 
 	return req, nil
+}
+
+func copyProviderRequestHeaders(dst, src http.Header) {
+	for key, values := range src {
+		if shouldStripProviderRequestHeader(key) {
+			continue
+		}
+		canonical := http.CanonicalHeaderKey(key)
+		for _, value := range values {
+			dst.Add(canonical, value)
+		}
+	}
+}
+
+func shouldStripProviderRequestHeader(key string) bool {
+	canonical := http.CanonicalHeaderKey(key)
+	lower := strings.ToLower(key)
+	if strings.HasPrefix(lower, "proxy-") || strings.HasPrefix(lower, "x-agyn-") {
+		return true
+	}
+
+	switch canonical {
+	case "Host", "Content-Length", "Connection", "Transfer-Encoding", "Keep-Alive", "Te", "Trailer", "Upgrade", "Authorization", "X-Api-Key":
+		return true
+	default:
+		return false
+	}
 }
 
 func extractRawModelValue(body []byte) string {

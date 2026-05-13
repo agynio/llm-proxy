@@ -214,15 +214,28 @@ func TestHandlerForwardAnthropicMessages(t *testing.T) {
 		if r.URL.Path != "/messages" {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
-		if r.Header.Get("Authorization") != "" {
-			t.Fatalf("unexpected authorization header %q", r.Header.Get("Authorization"))
+		if r.Host == "caller.example" {
+			t.Fatalf("expected caller host not to be forwarded")
 		}
+		assertProviderRequestHeaderAbsent(t, r.Header, "Authorization")
 		if r.Header.Get("X-Api-Key") != "provider-token" {
 			t.Fatalf("unexpected x-api-key header %q", r.Header.Get("X-Api-Key"))
 		}
 		if r.Header.Get("Anthropic-Version") != "2023-06-01" {
 			t.Fatalf("unexpected anthropic-version header %q", r.Header.Get("Anthropic-Version"))
 		}
+		if r.Header.Get("Anthropic-Beta") != "prompt-caching-2024-07-31" {
+			t.Fatalf("unexpected anthropic-beta header %q", r.Header.Get("Anthropic-Beta"))
+		}
+		assertProviderRequestHeaderAbsent(t, r.Header, "X-Agyn-Thread-Id")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Connection")
+		assertProviderRequestHeaderNotValue(t, r.Header, "Content-Length", "999")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Keep-Alive")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Te")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Trailer")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Transfer-Encoding")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Upgrade")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Proxy-Authorization")
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("unexpected content type %q", r.Header.Get("Content-Type"))
 		}
@@ -260,7 +273,20 @@ func TestHandlerForwardAnthropicMessages(t *testing.T) {
 
 	body := `{"model":"` + modelID.String() + `","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", strings.NewReader(body))
+	req.Host = "caller.example"
 	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
+	req.Header.Set("Authorization", "Bearer caller-token")
+	req.Header.Set("x-api-key", "caller-key")
+	req.Header.Set("x-agyn-thread-id", "thread-1")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Content-Length", "999")
+	req.Header.Set("Transfer-Encoding", "chunked")
+	req.Header.Set("Keep-Alive", "timeout=5")
+	req.Header.Set("TE", "trailers")
+	req.Header.Set("Trailer", "Expires")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Proxy-Authorization", "Basic caller")
 	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
 	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
@@ -272,6 +298,93 @@ func TestHandlerForwardAnthropicMessages(t *testing.T) {
 	}
 	if strings.TrimSpace(resp.Body.String()) != `{"ok":true}` {
 		t.Fatalf("unexpected response body: %s", resp.Body.String())
+	}
+}
+
+func TestHandlerForwardResponsesHeaders(t *testing.T) {
+	modelID := uuid.New()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+		if r.Host == "caller.example" {
+			t.Fatalf("expected caller host not to be forwarded")
+		}
+		if r.Header.Get("Authorization") != "Bearer provider-token" {
+			t.Fatalf("unexpected authorization header %q", r.Header.Get("Authorization"))
+		}
+		if r.Header.Get("Openai-Beta") != "responses=v1" {
+			t.Fatalf("unexpected openai-beta header %q", r.Header.Get("Openai-Beta"))
+		}
+		assertProviderRequestHeaderAbsent(t, r.Header, "X-Api-Key")
+		assertProviderRequestHeaderAbsent(t, r.Header, "X-Agyn-Thread-Id")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Connection")
+		assertProviderRequestHeaderNotValue(t, r.Header, "Content-Length", "999")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Keep-Alive")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Te")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Trailer")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Transfer-Encoding")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Upgrade")
+		assertProviderRequestHeaderAbsent(t, r.Header, "Proxy-Connection")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL + "/responses",
+		Token:          "provider-token",
+		RemoteName:     "remote-model",
+		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `","stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	req.Host = "caller.example"
+	req.Header.Set("openai-beta", "responses=v1")
+	req.Header.Set("Authorization", "Bearer caller-token")
+	req.Header.Set("x-api-key", "caller-key")
+	req.Header.Set("x-agyn-thread-id", "thread-1")
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Content-Length", "999")
+	req.Header.Set("Transfer-Encoding", "chunked")
+	req.Header.Set("Keep-Alive", "timeout=5")
+	req.Header.Set("TE", "trailers")
+	req.Header.Set("Trailer", "Expires")
+	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Proxy-Connection", "keep-alive")
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.Code)
+	}
+	if strings.TrimSpace(resp.Body.String()) != `{"ok":true}` {
+		t.Fatalf("unexpected response body: %s", resp.Body.String())
+	}
+}
+
+func assertProviderRequestHeaderAbsent(t *testing.T, header http.Header, key string) {
+	t.Helper()
+	if values, ok := header[key]; ok {
+		t.Fatalf("expected %s header to be absent, got %q", key, values)
+	}
+}
+
+func assertProviderRequestHeaderNotValue(t *testing.T, header http.Header, key string, blockedValue string) {
+	t.Helper()
+	for _, value := range header.Values(key) {
+		if value == blockedValue {
+			t.Fatalf("expected %s header not to include %q, got %q", key, blockedValue, header.Values(key))
+		}
 	}
 }
 
