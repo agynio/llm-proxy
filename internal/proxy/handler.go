@@ -317,8 +317,9 @@ func buildProviderRequest(ctx context.Context, endpoint string, token string, bo
 }
 
 func copyProviderRequestHeaders(dst, src http.Header) {
+	connectionHeaders := connectionHeaderTokens(src)
 	for key, values := range src {
-		if shouldStripProviderRequestHeader(key) {
+		if shouldStripProviderRequestHeader(key, connectionHeaders) {
 			continue
 		}
 		canonical := http.CanonicalHeaderKey(key)
@@ -328,8 +329,25 @@ func copyProviderRequestHeaders(dst, src http.Header) {
 	}
 }
 
-func shouldStripProviderRequestHeader(key string) bool {
+func connectionHeaderTokens(header http.Header) map[string]struct{} {
+	tokens := make(map[string]struct{})
+	for _, value := range header.Values("Connection") {
+		for token := range strings.SplitSeq(value, ",") {
+			canonical := http.CanonicalHeaderKey(strings.TrimSpace(token))
+			if canonical != "" {
+				tokens[canonical] = struct{}{}
+			}
+		}
+	}
+	return tokens
+}
+
+func shouldStripProviderRequestHeader(key string, connectionHeaders map[string]struct{}) bool {
 	canonical := http.CanonicalHeaderKey(key)
+	if _, ok := connectionHeaders[canonical]; ok {
+		return true
+	}
+
 	lower := strings.ToLower(key)
 	if strings.HasPrefix(lower, "proxy-") || strings.HasPrefix(lower, "x-agyn-") {
 		return true
