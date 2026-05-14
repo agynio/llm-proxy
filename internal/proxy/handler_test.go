@@ -34,15 +34,23 @@ func (f *fakeLLMClient) ResolveModel(_ context.Context, req *llmv1.ResolveModelR
 }
 
 type fakeAuthzClient struct {
-	resp    *authorizationv1.CheckResponse
-	err     error
-	lastReq *authorizationv1.CheckRequest
+	resp      *authorizationv1.CheckResponse
+	responses []*authorizationv1.CheckResponse
+	err       error
+	lastReq   *authorizationv1.CheckRequest
+	reqs      []*authorizationv1.CheckRequest
 }
 
 func (f *fakeAuthzClient) Check(_ context.Context, req *authorizationv1.CheckRequest, _ ...grpc.CallOption) (*authorizationv1.CheckResponse, error) {
 	f.lastReq = req
+	f.reqs = append(f.reqs, req)
 	if f.err != nil {
 		return nil, f.err
+	}
+	if len(f.responses) > 0 {
+		resp := f.responses[0]
+		f.responses = f.responses[1:]
+		return resp, nil
 	}
 	return f.resp, nil
 }
@@ -139,14 +147,66 @@ func TestHandlerForwardNonStream(t *testing.T) {
 	if llmClient.lastReq.GetModelId() != modelID.String() {
 		t.Fatalf("expected model id %s, got %s", modelID.String(), llmClient.lastReq.GetModelId())
 	}
-	if authzClient.lastReq.GetTupleKey().GetUser() != "identity:user-1" {
-		t.Fatalf("unexpected authz user %q", authzClient.lastReq.GetTupleKey().GetUser())
+	assertAuthzCheck(t, authzClient.reqs, 0, "identity:user-1", "can_use", "model:"+modelID.String())
+}
+
+func TestHandlerAuthorizesWithOrganizationMembershipFallback(t *testing.T) {
+	modelID := uuid.New()
+	providerCalled := false
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		providerCalled = true
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL + "/responses",
+		Token:          "provider-token",
+		RemoteName:     "remote-model",
+		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
+	}}
+	authzClient := &fakeAuthzClient{responses: []*authorizationv1.CheckResponse{
+		{Allowed: false},
+		{Allowed: true},
+	}}
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `"}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if !providerCalled {
+		t.Fatalf("expected provider to be called")
 	}
-	if authzClient.lastReq.GetTupleKey().GetRelation() != "can_use" {
-		t.Fatalf("unexpected authz relation %q", authzClient.lastReq.GetTupleKey().GetRelation())
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.Code)
 	}
-	if authzClient.lastReq.GetTupleKey().GetObject() != "model:"+modelID.String() {
-		t.Fatalf("unexpected authz object %q", authzClient.lastReq.GetTupleKey().GetObject())
+	assertAuthzCheck(t, authzClient.reqs, 0, "identity:user-1", "can_use", "model:"+modelID.String())
+	assertAuthzCheck(t, authzClient.reqs, 1, "identity:user-1", "member", "organization:org-1")
+}
+
+func assertAuthzCheck(t *testing.T, reqs []*authorizationv1.CheckRequest, index int, user string, relation string, object string) {
+	t.Helper()
+	if len(reqs) <= index {
+		t.Fatalf("expected authz check %d, got %d checks", index, len(reqs))
+	}
+	tupleKey := reqs[index].GetTupleKey()
+	if tupleKey.GetUser() != user {
+		t.Fatalf("unexpected authz user %q", tupleKey.GetUser())
+	}
+	if tupleKey.GetRelation() != relation {
+		t.Fatalf("unexpected authz relation %q", tupleKey.GetRelation())
+	}
+	if tupleKey.GetObject() != object {
+		t.Fatalf("unexpected authz object %q", tupleKey.GetObject())
 	}
 }
 
@@ -645,6 +705,8 @@ func TestHandlerForbidden(t *testing.T) {
 	if resp.Code != http.StatusForbidden {
 		t.Fatalf("expected status %d, got %d", http.StatusForbidden, resp.Code)
 	}
+	assertAuthzCheck(t, authzClient.reqs, 0, "identity:user-1", "can_use", "model:"+modelID.String())
+	assertAuthzCheck(t, authzClient.reqs, 1, "identity:user-1", "member", "organization:org-1")
 }
 
 func TestHandlerInvalidBody(t *testing.T) {
