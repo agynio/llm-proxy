@@ -22,13 +22,21 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download
 
 COPY buf.gen.yaml buf.yaml ./
-RUN buf generate buf.build/agynio/api \
-  --path agynio/api/llm/v1 \
-  --path agynio/api/users/v1 \
-  --path agynio/api/authorization/v1 \
-  --path agynio/api/metering/v1 \
-  --path agynio/api/ziti_management/v1 \
-  --path agynio/api/identity/v1
+RUN for attempt in 1 2 3; do \
+      if buf generate buf.build/agynio/api \
+        --path agynio/api/llm/v1 \
+        --path agynio/api/users/v1 \
+        --path agynio/api/authorization/v1 \
+        --path agynio/api/metering/v1 \
+        --path agynio/api/ziti_management/v1 \
+        --path agynio/api/identity/v1; then \
+        exit 0; \
+      fi; \
+      if [ "$attempt" -eq 3 ]; then \
+        exit 1; \
+      fi; \
+      sleep $((attempt * 10)); \
+    done
 
 COPY . .
 
