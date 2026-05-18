@@ -28,6 +28,7 @@ functions:
     echo "Patching llm-proxy deployment for DevSpace..."
     kubectl patch deployment llm-proxy-llm-proxy -n ${LLM_PROXY_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
     spec:
+      replicas: 1
       template:
         spec:
           securityContext:
@@ -54,6 +55,17 @@ functions:
                 limits:
                   cpu: "2"
                   memory: 4Gi
+              livenessProbe:
+                tcpSocket: null
+                httpGet: null
+                exec:
+                  command: ["true"]
+              readinessProbe:
+                tcpSocket: null
+                httpGet: null
+                exec:
+                  command: ["true"]
+              startupProbe: null
               securityContext:
                 runAsNonRoot: true
                 runAsUser: 1000
@@ -66,13 +78,14 @@ functions:
                   type: RuntimeDefault
     EOF
     )"
+    kubectl set env deployment/llm-proxy-llm-proxy -n ${LLM_PROXY_NAMESPACE} ZITI_ENABLED=false
   wait_for_source_deployment: |-
     exec_container \
       --label-selector=app.kubernetes.io/name=llm-proxy,app.kubernetes.io/instance=llm-proxy \
       --container=llm-proxy \
       -n ${LLM_PROXY_NAMESPACE} \
       --timeout=600 \
-      -- sh -c 'test -f /tmp/llm-proxy-source-ready && test -f /opt/app/data/go.mod && test -d /opt/app/data/.git'
+      -- bash -c 'test -f /tmp/llm-proxy-source-ready && test -f /opt/app/data/go.mod && test -d /opt/app/data/.git && (nc -z localhost 8080 >/dev/null 2>&1 || (echo > /dev/tcp/localhost/8080) >/dev/null 2>&1)'
   run_llm_proxy_e2e: |-
     cd e2e
     export AGYN_AGENT_IMAGE="${AGYN_AGENT_IMAGE:-ghcr.io/agynio/agent-runtime:v1.0.0}"
@@ -135,7 +148,7 @@ dev:
       llm-proxy:
         container: llm-proxy
         command:
-          - sh
+          - bash
           - -c
           - |-
             set -eu
