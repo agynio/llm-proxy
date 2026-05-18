@@ -41,6 +41,9 @@ functions:
             - name: llm-proxy
               image: ghcr.io/agynio/devcontainer-go:1 # dev container for source deploy
               workingDir: /opt/app/data
+              env:
+                - name: ZITI_ENABLED
+                  value: "false"
               command:
                 - sh
                 - -c
