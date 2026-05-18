@@ -81,6 +81,15 @@ functions:
                   type: RuntimeDefault
     EOF
     )"
+  run_llm_proxy_e2e: |-
+    cd e2e
+    devspace run test-e2e --tag svc_llm_proxy
+
+commands:
+  test-e2e: |-
+    devspace run-pipeline test-e2e $@
+  ci-e2e: |-
+    devspace run-pipeline ci-e2e $@
 
 pipelines:
   dev:
@@ -95,22 +104,20 @@ pipelines:
         start_dev --disable-pod-replace llm-proxy
       else
         start_dev --disable-pod-replace llm-proxy
-        echo "Waiting for llm-proxy to be healthy on :8080..."
-        healthy=false
-        for i in $(seq 1 60); do
-          if exec_container --label-selector=app.kubernetes.io/name=llm-proxy -n ${LLM_PROXY_NAMESPACE} -- bash -c 'nc -z localhost 8080 >/dev/null 2>&1 || (echo > /dev/tcp/localhost/8080) >/dev/null 2>&1'; then
-            healthy=true
-            break
-          fi
-          sleep 2
-        done
-        if [ "$healthy" != "true" ]; then
-          echo "ERROR: LLM Proxy did not become healthy within 120s" >&2
-          exit 1
-        fi
-        echo "Dev environment ready. Stopping dev session."
         stop_dev llm-proxy
       fi
+  test-e2e:
+    run: |-
+      run_llm_proxy_e2e
+  ci-e2e:
+    run: |-
+      disable_argocd_sync
+      patch_deployment
+      run_pipelines --background ci-e2e-source
+      run_llm_proxy_e2e
+  ci-e2e-source:
+    run: |-
+      start_dev --disable-pod-replace llm-proxy
 
 hooks:
   - name: restore-argocd-auto-sync

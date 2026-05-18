@@ -23,10 +23,18 @@ jobs:
       - name: Setup DevSpace
         uses: agynio/e2e/.github/actions/setup-devspace@main
 
-      - name: Deploy llm-proxy from source
-        run: devspace dev
+      - name: Run llm-proxy E2E
+        run: devspace run ci-e2e
+        env:
+          E2E_GO_TEST_RUN: TestLLMProxyGatewayCreatedModel
 
-      - name: Run E2E tests
-        uses: agynio/e2e/.github/actions/run-tests@main
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          service: llm_proxy
+          name: e2e-artifacts-llm-proxy
+          path: |
+            e2e/.artifacts/
+            e2e/.diagnostics/
+          include-hidden-files: true
+          if-no-files-found: warn
