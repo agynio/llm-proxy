@@ -73,6 +73,10 @@ jobs:
 
       - name: Run E2E tests
         uses: agynio/e2e/.github/actions/run-tests@main
+        env:
+          LLM_PROXY_URL: http://llm-proxy-llm-proxy.platform.svc.cluster.local:8080
+          E2E_GO_TEST_RUN: TestLLMProxyGatewayCreatedModel
         with:
           tag: svc_llm_proxy
           include_smoke: false
+          ref: noa/issue-llm-proxy-url
