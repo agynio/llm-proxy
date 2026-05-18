@@ -70,6 +70,11 @@ functions:
                 limits:
                   cpu: "2"
                   memory: 4Gi
+              startupProbe:
+                tcpSocket:
+                  port: http
+                periodSeconds: 2
+                failureThreshold: 180
               securityContext:
                 runAsNonRoot: true
                 runAsUser: 1000
