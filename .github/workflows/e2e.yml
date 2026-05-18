@@ -79,4 +79,3 @@ jobs:
         with:
           tag: svc_llm_proxy
           include_smoke: false
-          ref: noa/issue-llm-proxy-url
