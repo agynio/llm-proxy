@@ -54,14 +54,6 @@ functions:
                 limits:
                   cpu: "2"
                   memory: 4Gi
-              startupProbe:
-                exec:
-                  command:
-                    - test
-                    - -f
-                    - /tmp/llm-proxy-source-ready
-                periodSeconds: 2
-                failureThreshold: 180
               securityContext:
                 runAsNonRoot: true
                 runAsUser: 1000
