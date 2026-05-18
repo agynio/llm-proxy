@@ -83,7 +83,8 @@ functions:
     )"
   run_llm_proxy_e2e: |-
     cd e2e
-    devspace run test-e2e --tag svc_llm_proxy
+    LLM_PROXY_URL=http://llm-proxy-llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080 \
+      devspace run test-e2e --tag svc_llm_proxy
 
 commands:
   test-e2e: |-
