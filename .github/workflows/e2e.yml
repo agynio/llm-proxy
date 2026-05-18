@@ -21,53 +21,8 @@ jobs:
       - name: Set up DevSpace
         uses: agynio/e2e/.github/actions/setup-devspace@main
 
-      - name: Run llm-proxy from PR sources
-        run: |
-          set -euo pipefail
-
-          nohup devspace dev -w > /tmp/llm-proxy-devspace.log 2>&1 &
-          devspace_pid=$!
-          echo "$devspace_pid" > /tmp/llm-proxy-devspace.pid
-
-          for _ in $(seq 1 120); do
-            image=$(kubectl get deployment llm-proxy-llm-proxy \
-              -n platform \
-              -o jsonpath='{.spec.template.spec.containers[?(@.name=="llm-proxy")].image}')
-            if [ "$image" != "ghcr.io/agynio/devcontainer-go:1" ]; then
-              sleep 2
-              continue
-            fi
-
-            if kubectl exec deployment/llm-proxy-llm-proxy \
-              -n platform \
-              -c llm-proxy \
-              -- sh -c 'nc -z localhost 8080 >/dev/null 2>&1'; then
-              exit 0
-            fi
-
-            if ! kill -0 "$devspace_pid" >/dev/null 2>&1; then
-              cat /tmp/llm-proxy-devspace.log
-              exit 1
-            fi
-
-            sleep 2
-          done
-
-          cat /tmp/llm-proxy-devspace.log
-          exit 1
-
-      - name: Run E2E tests
-        uses: agynio/e2e/.github/actions/run-tests@main
+      - name: Run llm-proxy E2E
+        run: devspace run test-e2e
         env:
-          LLM_PROXY_URL: http://llm-proxy-llm-proxy.platform.svc.cluster.local:8080
           E2E_GO_TEST_RUN: TestLLMProxyGatewayCreatedModel
-        with:
-          tag: svc_llm_proxy
-          include_smoke: false
-
-      - name: Stop llm-proxy DevSpace
-        if: always()
-        run: |
-          if [ -f /tmp/llm-proxy-devspace.pid ]; then
-            kill "$(cat /tmp/llm-proxy-devspace.pid)" >/dev/null 2>&1 || true
-          fi
+          TAGS: svc_llm_proxy

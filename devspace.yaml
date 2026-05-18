@@ -141,6 +141,13 @@ pipelines:
 
   test-e2e:
     run: |-
+      disable_argocd_sync
+      patch_deployment
+      start_dev --disable-pod-replace llm-proxy &
+      LLM_PROXY_DEV_PID=$!
+
+      trap 'stop_dev llm-proxy || true; restore_argocd_sync' EXIT
+
       create_deployments e2e-runner
       start_dev e2e-runner &
       sleep 5
