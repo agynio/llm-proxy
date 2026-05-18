@@ -173,6 +173,8 @@ pipelines:
       patch_deployment
       trap 'stop_dev llm-proxy || true; restore_argocd_sync' EXIT
 
+      create_deployments e2e-runner
+      start_dev e2e-runner &
       start_dev --disable-pod-replace llm-proxy &
       sleep 5
 
