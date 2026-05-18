@@ -22,7 +22,6 @@ jobs:
         uses: agynio/e2e/.github/actions/setup-devspace@main
 
       - name: Run llm-proxy E2E
-        run: devspace run test-e2e
+        run: devspace run ci-e2e
         env:
           E2E_GO_TEST_RUN: TestLLMProxyGatewayCreatedModel
-          TAGS: svc_llm_proxy

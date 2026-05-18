@@ -108,6 +108,8 @@ deployments:
 commands:
   test-e2e: |-
     devspace run-pipeline test-e2e $@
+  ci-e2e: |-
+    devspace run-pipeline ci-e2e $@
 
 pipelines:
   dev:
@@ -164,6 +166,18 @@ pipelines:
       stop_dev e2e-runner
       purge_deployments e2e-runner
       exit $EXIT_CODE
+
+  ci-e2e:
+    run: |-
+      disable_argocd_sync
+      patch_deployment
+      trap 'stop_dev llm-proxy || true; restore_argocd_sync' EXIT
+
+      start_dev --disable-pod-replace llm-proxy &
+      sleep 5
+
+      cd e2e
+      devspace run test-e2e --tag svc_llm_proxy
 
 hooks:
   - name: restore-argocd-auto-sync
