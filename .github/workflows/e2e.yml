@@ -41,7 +41,7 @@ jobs:
             if kubectl exec deployment/llm-proxy-llm-proxy \
               -n platform \
               -c llm-proxy \
-              -- bash -c 'nc -z localhost 8080 >/dev/null 2>&1 || (echo > /dev/tcp/localhost/8080) >/dev/null 2>&1'; then
+              -- sh -c 'nc -z localhost 8080 >/dev/null 2>&1'; then
               exit 0
             fi
 
