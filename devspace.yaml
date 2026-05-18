@@ -144,8 +144,7 @@ pipelines:
       disable_argocd_sync
       patch_deployment
       trap 'stop_dev llm-proxy || true; restore_argocd_sync' EXIT
-
-      start_dev --disable-pod-replace llm-proxy --exit-after-deploy &
+      start_dev --disable-pod-replace llm-proxy &
 
       create_deployments e2e-runner
       start_dev e2e-runner &
@@ -216,6 +215,16 @@ dev:
     sync:
       - path: ./:/opt/app/data
         excludePaths:
+          - .git/
+          - .devspace/
+          - /.gen/
+          - /tmp/
+        uploadExcludePaths:
+          - .git/
+          - .devspace/
+          - /.gen/
+          - /tmp/
+        downloadExcludePaths:
           - .git/
           - .devspace/
           - /.gen/
