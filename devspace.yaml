@@ -83,6 +83,12 @@ functions:
     )"
   run_llm_proxy_e2e: |-
     cd e2e
+    export AGYN_AGENT_IMAGE="${AGYN_AGENT_IMAGE:-ghcr.io/agynio/agent-runtime:v1.0.0}"
+    export CODEX_INIT_IMAGE="${CODEX_INIT_IMAGE:-ghcr.io/agynio/agent-init-codex:latest}"
+    export AGYN_AGENT_INIT_IMAGE="${AGYN_AGENT_INIT_IMAGE:-${CODEX_INIT_IMAGE}}"
+    export AGN_INIT_IMAGE="${AGN_INIT_IMAGE:-ghcr.io/agynio/agent-init-agn:latest}"
+    export CLAUDE_INIT_IMAGE="${CLAUDE_INIT_IMAGE:-ghcr.io/agynio/agent-init-claude:latest}"
+    export AGN_EXPOSE_INIT_IMAGE="${AGN_EXPOSE_INIT_IMAGE:-ghcr.io/agynio/agent-init-agn:latest}"
     LLM_PROXY_URL=http://llm-proxy-llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080 \
       devspace run test-e2e --tag svc_llm_proxy
 
