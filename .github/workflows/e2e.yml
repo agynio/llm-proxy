@@ -1,0 +1,47 @@
+name: E2E
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Provision cluster
+        uses: agynio/bootstrap/.github/actions/provision@main
+
+      - name: Setup DevSpace
+        uses: agynio/e2e/.github/actions/setup-devspace@main
+
+      - name: Checkout E2E repository
+        uses: actions/checkout@v4
+        with:
+          repository: agynio/e2e
+          ref: main
+          path: e2e
+
+      - name: Run llm-proxy E2E
+        run: devspace run ci-e2e
+        env:
+          E2E_GO_TEST_RUN: TestLLMProxyGatewayCreatedModel
+
+      - name: Upload E2E artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-artifacts-llm-proxy
+          path: |
+            e2e/.artifacts/
+            e2e/.diagnostics/
+          include-hidden-files: true
+          if-no-files-found: warn
