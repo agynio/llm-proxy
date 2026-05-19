@@ -59,6 +59,10 @@ functions:
                     sleep 1; elapsed=$((elapsed + 1))
                     [ "$elapsed" -ge 180 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
                   done
+                  elapsed=0
+                  while [ "$elapsed" -lt 5 ]; do
+                    sleep 1; elapsed=$((elapsed + 1))
+                  done
                   buf generate buf.build/agynio/api \
                     --path agynio/api/llm/v1 \
                     --path agynio/api/users/v1 \
