@@ -50,29 +50,8 @@ functions:
               image: ghcr.io/agynio/devcontainer-go:1 # dev container for source deploy
               workingDir: /opt/app/data
               command:
-                - bash
-                - -c
-                - |
-                  set -eu
-                  elapsed=0
-                  while [ ! -f /opt/app/data/go.mod ]; do
-                    sleep 1; elapsed=$((elapsed + 1))
-                    [ "$elapsed" -ge 180 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
-                  done
-                  elapsed=0
-                  while [ "$elapsed" -lt 5 ]; do
-                    sleep 1; elapsed=$((elapsed + 1))
-                  done
-                  buf generate buf.build/agynio/api \
-                    --path agynio/api/llm/v1 \
-                    --path agynio/api/users/v1 \
-                    --path agynio/api/authorization/v1 \
-                    --path agynio/api/metering/v1 \
-                    --path agynio/api/ziti_management/v1 \
-                    --path agynio/api/identity/v1
-                  go build -o /tmp/llm-proxy ./cmd/llm-proxy
-                  echo ready > /tmp/llm-proxy-source-ready
-                  exec /tmp/llm-proxy
+                - sleep
+                - infinity
               volumeMounts:
                 - name: devspace-start
                   mountPath: /.devspace
@@ -129,7 +108,12 @@ functions:
       -n ${LLM_PROXY_NAMESPACE} \
       deploy/llm-proxy-llm-proxy \
       -c llm-proxy \
-      -- bash -c 'elapsed=0; while [ "$elapsed" -lt 120 ]; do test -f /tmp/llm-proxy-source-ready && test -f /opt/app/data/go.mod && (echo > /dev/tcp/127.0.0.1/8080) >/dev/null 2>&1 && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; echo "llm-proxy source deployment is not ready" >&2; exit 1'
+      -- bash -c 'set -eu; cd /opt/app/data; buf generate buf.build/agynio/api --path agynio/api/llm/v1 --path agynio/api/users/v1 --path agynio/api/authorization/v1 --path agynio/api/metering/v1 --path agynio/api/ziti_management/v1 --path agynio/api/identity/v1; go build -o /tmp/llm-proxy ./cmd/llm-proxy; echo ready > /tmp/llm-proxy-source-ready; nohup /tmp/llm-proxy >/tmp/llm-proxy.log 2>&1 &'
+    kubectl exec \
+      -n ${LLM_PROXY_NAMESPACE} \
+      deploy/llm-proxy-llm-proxy \
+      -c llm-proxy \
+      -- bash -c 'test -f /tmp/llm-proxy-source-ready && test -f /opt/app/data/go.mod && (echo > /dev/tcp/127.0.0.1/8080) >/dev/null 2>&1 || { cat /tmp/llm-proxy.log >&2; echo "llm-proxy source deployment is not ready" >&2; exit 1; }'
   run_llm_proxy_e2e: |-
     cd e2e
     export AGYN_AGENT_IMAGE="${AGYN_AGENT_IMAGE:-ghcr.io/agynio/agent-runtime:v1.0.0}"
