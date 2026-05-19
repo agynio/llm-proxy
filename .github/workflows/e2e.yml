@@ -34,7 +34,7 @@ jobs:
         run: devspace run ci-e2e
         env:
           E2E_TAGS: svc_agents_orchestrator svc_llm_proxy
-          E2E_GO_TEST_RUN: TestLLMProxyGatewayCreatedModel|TestAgentRespondsToThreadMessageViaLLMProxy
+          E2E_GO_TEST_RUN: TestLLMProxyGatewayCreatedModel|TestFullPipelineAgnMessageResponse
 
       - name: Upload E2E artifacts
         if: always()
