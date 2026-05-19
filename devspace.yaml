@@ -116,15 +116,6 @@ functions:
     EOF
     )"
   wait_for_source_deployment: |-
-    kubectl wait deployment/llm-proxy-llm-proxy \
-      -n ${LLM_PROXY_NAMESPACE} \
-      --for=condition=Available \
-      --timeout=600s
-    kubectl wait pod \
-      -n ${LLM_PROXY_NAMESPACE} \
-      --selector=app.kubernetes.io/name=llm-proxy,app.kubernetes.io/instance=llm-proxy,agyn.io/source-run=true \
-      --for=condition=Ready \
-      --timeout=600s
     kubectl exec \
       -n ${LLM_PROXY_NAMESPACE} \
       deploy/llm-proxy-llm-proxy \
@@ -192,6 +183,9 @@ dev:
     containers:
       llm-proxy:
         container: llm-proxy
+        command:
+          - sleep
+          - infinity
         env:
           - name: ZITI_ENABLED
             value: "false"
