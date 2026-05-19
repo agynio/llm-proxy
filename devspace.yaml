@@ -81,6 +81,12 @@ functions:
                   type: RuntimeDefault
     EOF
     )"
+  patch_agents_orchestrator: |-
+    echo "Patching agents-orchestrator to target llm-proxy service..."
+    kubectl set env deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} \
+      AGENT_LLM_BASE_URL=http://llm-proxy-llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080/v1
+    kubectl rollout status deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} --timeout=120s
+
   run_llm_proxy_e2e: |-
     cd e2e
     export AGYN_AGENT_IMAGE="${AGYN_AGENT_IMAGE:-ghcr.io/agynio/agent-runtime:v1.0.0}"
@@ -89,8 +95,11 @@ functions:
     export AGN_INIT_IMAGE="${AGN_INIT_IMAGE:-ghcr.io/agynio/agent-init-agn:latest}"
     export CLAUDE_INIT_IMAGE="${CLAUDE_INIT_IMAGE:-ghcr.io/agynio/agent-init-claude:latest}"
     export AGN_EXPOSE_INIT_IMAGE="${AGN_EXPOSE_INIT_IMAGE:-ghcr.io/agynio/agent-init-agn:latest}"
+    test_tags="${E2E_TAGS:-svc_llm_proxy}"
+    test_suites="${E2E_SUITES:-go-core}"
     LLM_PROXY_URL=http://llm-proxy-llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080 \
-      devspace run test-e2e --tag svc_llm_proxy
+      E2E_SUITES="${test_suites}" \
+      devspace run test-e2e $(for tag in ${test_tags}; do printf ' --tag %s' "${tag}"; done)
 
 commands:
   test-e2e: |-
@@ -121,6 +130,7 @@ pipelines:
       disable_argocd_sync
       patch_deployment
       run_pipelines --background ci-e2e-source
+      patch_agents_orchestrator
       run_llm_proxy_e2e
   ci-e2e-source:
     run: |-
