@@ -89,7 +89,7 @@ functions:
       --container=llm-proxy \
       -n ${LLM_PROXY_NAMESPACE} \
       --timeout=600 \
-      -- bash -c 'test -f /tmp/llm-proxy-source-ready && test -f /opt/app/data/go.mod && test -d /opt/app/data/.git && (nc -z localhost 8080 >/dev/null 2>&1 || (echo > /dev/tcp/localhost/8080) >/dev/null 2>&1)'
+      -- bash -c 'test -f /tmp/llm-proxy-source-ready && test -f /opt/app/data/go.mod && test -d /opt/app/data/.git && (nc -z localhost 8080 >/dev/null 2>&1 || (echo > /dev/tcp/localhost/8080) >/dev/null 2>&1) || { echo "llm-proxy source deployment is not ready" >&2; exit 1; }'
   run_llm_proxy_e2e: |-
     cd e2e
     export AGYN_AGENT_IMAGE="${AGYN_AGENT_IMAGE:-ghcr.io/agynio/agent-runtime:v1.0.0}"
