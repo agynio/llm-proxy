@@ -196,6 +196,7 @@ dev:
             value: "false"
         sync:
           - path: ./:/opt/app/data
+            initialSync: preferLocal
             disableDownload: true
             excludePaths:
               - .git/
