@@ -99,21 +99,32 @@ functions:
     EOF
     )"
   wait_for_source_deployment: |-
-    kubectl wait pod \
+    pod_name="$(kubectl get pod \
       -n ${LLM_PROXY_NAMESPACE} \
       --selector=app.kubernetes.io/name=llm-proxy,app.kubernetes.io/instance=llm-proxy,agyn.io/source-run=true \
+      --sort-by=.metadata.creationTimestamp \
+      -o jsonpath='{.items[-1:].metadata.name}')"
+    test -n "${pod_name}"
+    kubectl wait pod \
+      -n ${LLM_PROXY_NAMESPACE} \
+      "${pod_name}" \
       --for=condition=Ready \
       --timeout=600s
     kubectl exec \
       -n ${LLM_PROXY_NAMESPACE} \
-      deploy/llm-proxy-llm-proxy \
+      "${pod_name}" \
       -c llm-proxy \
-      -- bash -c 'set -eu; cd /opt/app/data; buf generate buf.build/agynio/api --path agynio/api/llm/v1 --path agynio/api/users/v1 --path agynio/api/authorization/v1 --path agynio/api/metering/v1 --path agynio/api/ziti_management/v1 --path agynio/api/identity/v1; go build -o /tmp/llm-proxy ./cmd/llm-proxy; echo ready > /tmp/llm-proxy-source-ready; nohup /tmp/llm-proxy >/tmp/llm-proxy.log 2>&1 &'
+      -- bash -c 'set -eu; cd /opt/app/data; buf generate buf.build/agynio/api --path agynio/api/llm/v1 --path agynio/api/users/v1 --path agynio/api/authorization/v1 --path agynio/api/metering/v1 --path agynio/api/ziti_management/v1 --path agynio/api/identity/v1; go build -o /tmp/llm-proxy ./cmd/llm-proxy; echo ready > /tmp/llm-proxy-source-ready'
     kubectl exec \
       -n ${LLM_PROXY_NAMESPACE} \
-      deploy/llm-proxy-llm-proxy \
+      "${pod_name}" \
       -c llm-proxy \
-      -- bash -c 'test -f /tmp/llm-proxy-source-ready && test -f /opt/app/data/go.mod && (echo > /dev/tcp/127.0.0.1/8080) >/dev/null 2>&1 || { cat /tmp/llm-proxy.log >&2; echo "llm-proxy source deployment is not ready" >&2; exit 1; }'
+      -- bash -c 'rm -f /tmp/llm-proxy.log; nohup /tmp/llm-proxy >/tmp/llm-proxy.log 2>&1 &'
+    kubectl exec \
+      -n ${LLM_PROXY_NAMESPACE} \
+      "${pod_name}" \
+      -c llm-proxy \
+      -- bash -c 'set -eu; test -f /tmp/llm-proxy-source-ready; test -f /opt/app/data/go.mod; test "$(cat /proc/1/comm)" = sleep; pgrep -f /tmp/llm-proxy >/dev/null; (echo > /dev/tcp/127.0.0.1/8080) >/dev/null 2>&1 || { cat /tmp/llm-proxy.log >&2; echo "llm-proxy source deployment is not ready" >&2; exit 1; }'
   run_llm_proxy_e2e: |-
     cd e2e
     export AGYN_AGENT_IMAGE="${AGYN_AGENT_IMAGE:-ghcr.io/agynio/agent-runtime:v1.0.0}"
