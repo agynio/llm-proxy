@@ -89,16 +89,9 @@ functions:
     export AGN_INIT_IMAGE="${AGN_INIT_IMAGE:-ghcr.io/agynio/agent-init-agn:latest}"
     export CLAUDE_INIT_IMAGE="${CLAUDE_INIT_IMAGE:-ghcr.io/agynio/agent-init-claude:latest}"
     export AGN_EXPOSE_INIT_IMAGE="${AGN_EXPOSE_INIT_IMAGE:-ghcr.io/agynio/agent-init-agn:latest}"
-    test_tags=(svc_llm_proxy)
-    if [ -n "${E2E_TAGS:-}" ]; then
-      read -r -a test_tags <<< "${E2E_TAGS}"
-    fi
-    test_args=()
-    for tag in "${test_tags[@]}"; do
-      test_args+=(--tag "${tag}")
-    done
+    test_tags="${E2E_TAGS:-svc_llm_proxy}"
     LLM_PROXY_URL=http://llm-proxy-llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080 \
-      devspace run test-e2e "${test_args[@]}"
+      devspace run test-e2e $(for tag in ${test_tags}; do printf ' --tag %s' "${tag}"; done)
 
 commands:
   test-e2e: |-
