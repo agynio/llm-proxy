@@ -36,6 +36,8 @@ functions:
             fsGroup: 1000
           initContainers: []
           volumes:
+            - name: devspace-start
+              emptyDir: {}
             - name: data
               emptyDir: {}
           containers:
@@ -46,6 +48,8 @@ functions:
                 - sleep
                 - infinity
               volumeMounts:
+                - name: devspace-start
+                  mountPath: /.devspace
                 - name: data
                   mountPath: /opt/app/data
               resources:
