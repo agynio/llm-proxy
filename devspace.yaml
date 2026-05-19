@@ -130,11 +130,19 @@ functions:
     EOF
     )"
   wait_for_source_deployment: |-
-    exec_container \
-      --label-selector=app.kubernetes.io/name=llm-proxy,app.kubernetes.io/instance=llm-proxy,agyn.io/source-run=true \
-      --container=llm-proxy \
+    kubectl wait deployment/llm-proxy-llm-proxy \
       -n ${LLM_PROXY_NAMESPACE} \
-      --timeout=600 \
+      --for=condition=Available \
+      --timeout=600s
+    kubectl wait pod \
+      -n ${LLM_PROXY_NAMESPACE} \
+      --selector=app.kubernetes.io/name=llm-proxy,app.kubernetes.io/instance=llm-proxy,agyn.io/source-run=true \
+      --for=condition=Ready \
+      --timeout=600s
+    kubectl exec \
+      -n ${LLM_PROXY_NAMESPACE} \
+      deploy/llm-proxy-llm-proxy \
+      -c llm-proxy \
       -- bash -c 'elapsed=0; while [ "$elapsed" -lt 120 ]; do test -f /tmp/llm-proxy-source-ready && test -f /opt/app/data/go.mod && (echo > /dev/tcp/127.0.0.1/8080) >/dev/null 2>&1 && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; echo "llm-proxy source deployment is not ready" >&2; exit 1'
   run_llm_proxy_e2e: |-
     cd e2e
