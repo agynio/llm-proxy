@@ -54,7 +54,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: agynio/e2e
-          ref: noa/issue-57
+          ref: main
           path: e2e
 
       - name: Run llm-proxy E2E
@@ -62,7 +62,7 @@ jobs:
         env:
           E2E_SUITES: go-core
           E2E_TAGS: svc_agents_orchestrator svc_llm_proxy
-          E2E_GO_TEST_RUN: TestAgentRespondsToThreadMessageViaLLMProxy
+          E2E_GO_TEST_RUN: "^(TestLLMProxyGatewayCreatedModel|TestFullPipelineAgnMessageResponse)$"
 
       - name: Upload E2E artifacts
         if: always()
