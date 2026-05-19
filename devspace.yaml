@@ -81,6 +81,12 @@ functions:
                   type: RuntimeDefault
     EOF
     )"
+  patch_agents_orchestrator: |-
+    echo "Patching agents-orchestrator to target llm-proxy service..."
+    kubectl set env deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} \
+      AGENT_LLM_BASE_URL=http://llm-proxy-llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080/v1
+    kubectl rollout status deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} --timeout=120s
+
   run_llm_proxy_e2e: |-
     cd e2e
     export AGYN_AGENT_IMAGE="${AGYN_AGENT_IMAGE:-ghcr.io/agynio/agent-runtime:v1.0.0}"
@@ -124,6 +130,7 @@ pipelines:
       disable_argocd_sync
       patch_deployment
       run_pipelines --background ci-e2e-source
+      patch_agents_orchestrator
       run_llm_proxy_e2e
   ci-e2e-source:
     run: |-
