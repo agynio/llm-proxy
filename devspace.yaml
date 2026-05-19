@@ -66,23 +66,9 @@ functions:
                     --path agynio/api/metering/v1 \
                     --path agynio/api/ziti_management/v1 \
                     --path agynio/api/identity/v1
-                  go run ./cmd/llm-proxy &
-                  server_pid="$!"
-                  trap 'kill "${server_pid}" 2>/dev/null || true' INT TERM
-                  elapsed=0
-                  while [ "$elapsed" -lt 120 ]; do
-                    if ! kill -0 "${server_pid}" 2>/dev/null; then
-                      wait "${server_pid}"
-                    fi
-                    if (echo > /dev/tcp/127.0.0.1/8080) >/dev/null 2>&1; then
-                      echo ready > /tmp/llm-proxy-source-ready
-                      wait "${server_pid}"
-                    fi
-                    sleep 1; elapsed=$((elapsed + 1))
-                  done
-                  echo "ERROR: llm-proxy source server did not become ready" >&2
-                  kill "${server_pid}" 2>/dev/null || true
-                  wait "${server_pid}"
+                  go build -o /tmp/llm-proxy ./cmd/llm-proxy
+                  echo ready > /tmp/llm-proxy-source-ready
+                  exec /tmp/llm-proxy
               volumeMounts:
                 - name: devspace-start
                   mountPath: /.devspace
