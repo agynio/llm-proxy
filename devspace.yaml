@@ -30,6 +30,9 @@ functions:
     spec:
       replicas: 1
       template:
+        metadata:
+          labels:
+            agyn.io/source-run: "true"
         spec:
           securityContext:
             runAsUser: 1000
@@ -63,8 +66,23 @@ functions:
                     --path agynio/api/metering/v1 \
                     --path agynio/api/ziti_management/v1 \
                     --path agynio/api/identity/v1
-                  echo ready > /tmp/llm-proxy-source-ready
-                  exec go run ./cmd/llm-proxy
+                  go run ./cmd/llm-proxy &
+                  server_pid="$!"
+                  trap 'kill "${server_pid}" 2>/dev/null || true' INT TERM
+                  elapsed=0
+                  while [ "$elapsed" -lt 120 ]; do
+                    if ! kill -0 "${server_pid}" 2>/dev/null; then
+                      wait "${server_pid}"
+                    fi
+                    if (echo > /dev/tcp/127.0.0.1/8080) >/dev/null 2>&1; then
+                      echo ready > /tmp/llm-proxy-source-ready
+                      wait "${server_pid}"
+                    fi
+                    sleep 1; elapsed=$((elapsed + 1))
+                  done
+                  echo "ERROR: llm-proxy source server did not become ready" >&2
+                  kill "${server_pid}" 2>/dev/null || true
+                  wait "${server_pid}"
               volumeMounts:
                 - name: devspace-start
                   mountPath: /.devspace
@@ -103,13 +121,21 @@ functions:
     EOF
     )"
     kubectl set env deployment/llm-proxy-llm-proxy -n ${LLM_PROXY_NAMESPACE} ZITI_ENABLED=false
+    kubectl patch service llm-proxy-llm-proxy -n ${LLM_PROXY_NAMESPACE} --type merge --patch "$(cat <<'EOF'
+    spec:
+      selector:
+        app.kubernetes.io/name: llm-proxy
+        app.kubernetes.io/instance: llm-proxy
+        agyn.io/source-run: "true"
+    EOF
+    )"
   wait_for_source_deployment: |-
     exec_container \
-      --label-selector=app.kubernetes.io/name=llm-proxy,app.kubernetes.io/instance=llm-proxy \
+      --label-selector=app.kubernetes.io/name=llm-proxy,app.kubernetes.io/instance=llm-proxy,agyn.io/source-run=true \
       --container=llm-proxy \
       -n ${LLM_PROXY_NAMESPACE} \
       --timeout=600 \
-      -- bash -c 'test -f /tmp/llm-proxy-source-ready && test -f /opt/app/data/go.mod && test -d /opt/app/data/.git || { echo "llm-proxy source marker is not ready" >&2; exit 1; }'
+      -- bash -c 'elapsed=0; while [ "$elapsed" -lt 120 ]; do test -f /tmp/llm-proxy-source-ready && test -f /opt/app/data/go.mod && (echo > /dev/tcp/127.0.0.1/8080) >/dev/null 2>&1 && exit 0; sleep 1; elapsed=$((elapsed + 1)); done; echo "llm-proxy source deployment is not ready" >&2; exit 1'
   run_llm_proxy_e2e: |-
     cd e2e
     export AGYN_AGENT_IMAGE="${AGYN_AGENT_IMAGE:-ghcr.io/agynio/agent-runtime:v1.0.0}"
@@ -168,6 +194,7 @@ dev:
     labelSelector:
       app.kubernetes.io/name: llm-proxy
       app.kubernetes.io/instance: llm-proxy
+      agyn.io/source-run: "true"
     containers:
       llm-proxy:
         container: llm-proxy
