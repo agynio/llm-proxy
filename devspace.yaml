@@ -205,17 +205,17 @@ dev:
             excludePaths:
               - .git/
               - .devspace/
-              - /.gen/
+              - .gen/
               - /tmp/
             uploadExcludePaths:
               - .git/
               - .devspace/
-              - /.gen/
+              - .gen/
               - /tmp/
             downloadExcludePaths:
               - .git/
               - .devspace/
-              - /.gen/
+              - .gen/
               - /tmp/
         logs:
           enabled: true
