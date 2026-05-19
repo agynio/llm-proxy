@@ -40,6 +40,8 @@ functions:
               emptyDir: {}
             - name: data
               emptyDir: {}
+            - name: tmp
+              emptyDir: {}
           containers:
             - name: llm-proxy
               image: ghcr.io/agynio/devcontainer-go:1 # dev container for source deploy
@@ -68,6 +70,8 @@ functions:
                   mountPath: /.devspace
                 - name: data
                   mountPath: /opt/app/data
+                - name: tmp
+                  mountPath: /tmp
               resources:
                 requests:
                   cpu: 500m
