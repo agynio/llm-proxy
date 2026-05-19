@@ -38,6 +38,23 @@ func Middleware(zitiResolver IdentityResolver, apiTokenResolver BearerTokenResol
 }
 
 func resolveIdentity(ctx context.Context, authHeader string, zitiResolver IdentityResolver, apiTokenResolver BearerTokenResolver) (context.Context, error) {
+	accessToken, bearerOK := httpauth.ExtractBearerToken(authHeader)
+	if bearerOK {
+		if !apitokenresolver.HasPrefix(accessToken) {
+			return ctx, errors.New("unsupported bearer token")
+		}
+		if apiTokenResolver == nil {
+			return ctx, errors.New("api token resolver is not configured")
+		}
+
+		resolved, err := apiTokenResolver.ResolveFromToken(ctx, accessToken)
+		if err != nil {
+			return ctx, err
+		}
+
+		return identity.WithIdentity(ctx, resolved), nil
+	}
+
 	sourceIdentity, ok := ziticonn.SourceIdentityFromContext(ctx)
 	if ok {
 		if zitiResolver == nil {
@@ -50,21 +67,5 @@ func resolveIdentity(ctx context.Context, authHeader string, zitiResolver Identi
 		return identity.WithIdentity(ctx, resolved), nil
 	}
 
-	accessToken, ok := httpauth.ExtractBearerToken(authHeader)
-	if !ok {
-		return ctx, errors.New("authorization required")
-	}
-	if !apitokenresolver.HasPrefix(accessToken) {
-		return ctx, errors.New("unsupported bearer token")
-	}
-	if apiTokenResolver == nil {
-		return ctx, errors.New("api token resolver is not configured")
-	}
-
-	resolved, err := apiTokenResolver.ResolveFromToken(ctx, accessToken)
-	if err != nil {
-		return ctx, err
-	}
-
-	return identity.WithIdentity(ctx, resolved), nil
+	return ctx, errors.New("authorization required")
 }
