@@ -150,6 +150,64 @@ func TestHandlerForwardNonStream(t *testing.T) {
 	}
 }
 
+func TestHandlerAuthorizesAgentWithWorkloadPrincipal(t *testing.T) {
+	modelID := uuid.New()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer provider.Close()
+
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL,
+		Token:          "provider-token",
+		RemoteName:     "remote-model",
+		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+
+	body := `{"model":"` + modelID.String() + `","stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{
+		IdentityID:   "agent-1",
+		IdentityType: identity.IdentityTypeAgent,
+		WorkloadID:   "workload-1",
+		ZitiID:       "ziti-agent-1",
+	})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.Code)
+	}
+	tuple := authzClient.lastReq.GetTupleKey()
+	if tuple.GetUser() != "identity:workload-1" {
+		t.Fatalf("expected workload authz user, got %q", tuple.GetUser())
+	}
+	if tuple.GetRelation() != "can_use" {
+		t.Fatalf("unexpected authz relation %q", tuple.GetRelation())
+	}
+	if tuple.GetObject() != "model:"+modelID.String() {
+		t.Fatalf("unexpected authz object %q", tuple.GetObject())
+	}
+}
+
+func TestAuthorizationPrincipalIDUsesAgentIdentityWhenWorkloadMissing(t *testing.T) {
+	principalID := authorizationPrincipalID(identity.ResolvedIdentity{
+		IdentityID:   "agent-1",
+		IdentityType: identity.IdentityTypeAgent,
+	})
+	if principalID != "agent-1" {
+		t.Fatalf("expected agent identity fallback, got %q", principalID)
+	}
+}
+
 func TestHandlerForwardStream(t *testing.T) {
 	modelID := uuid.New()
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

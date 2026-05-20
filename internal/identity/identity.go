@@ -18,6 +18,8 @@ const (
 type ResolvedIdentity struct {
 	IdentityID   string
 	IdentityType IdentityType
+	WorkloadID   string
+	ZitiID       string
 }
 
 func ParseIdentityType(value string) (IdentityType, error) {
