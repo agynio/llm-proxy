@@ -299,9 +299,6 @@ func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.Resolv
 }
 
 func authorizationPrincipalID(resolved identity.ResolvedIdentity) string {
-	if resolved.IdentityType == identity.IdentityTypeAgent && resolved.WorkloadID != "" {
-		return resolved.WorkloadID
-	}
 	return resolved.IdentityID
 }
 

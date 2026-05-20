@@ -150,7 +150,7 @@ func TestHandlerForwardNonStream(t *testing.T) {
 	}
 }
 
-func TestHandlerAuthorizesAgentWithWorkloadPrincipal(t *testing.T) {
+func TestHandlerAuthorizesAgentWithIdentityPrincipal(t *testing.T) {
 	modelID := uuid.New()
 	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -187,8 +187,8 @@ func TestHandlerAuthorizesAgentWithWorkloadPrincipal(t *testing.T) {
 		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.Code)
 	}
 	tuple := authzClient.lastReq.GetTupleKey()
-	if tuple.GetUser() != "identity:workload-1" {
-		t.Fatalf("expected workload authz user, got %q", tuple.GetUser())
+	if tuple.GetUser() != "identity:agent-1" {
+		t.Fatalf("expected agent authz user, got %q", tuple.GetUser())
 	}
 	if tuple.GetRelation() != "can_use" {
 		t.Fatalf("unexpected authz relation %q", tuple.GetRelation())
@@ -198,13 +198,14 @@ func TestHandlerAuthorizesAgentWithWorkloadPrincipal(t *testing.T) {
 	}
 }
 
-func TestAuthorizationPrincipalIDUsesAgentIdentityWhenWorkloadMissing(t *testing.T) {
+func TestAuthorizationPrincipalIDUsesAgentIdentityEvenWhenWorkloadPresent(t *testing.T) {
 	principalID := authorizationPrincipalID(identity.ResolvedIdentity{
 		IdentityID:   "agent-1",
 		IdentityType: identity.IdentityTypeAgent,
+		WorkloadID:   "workload-1",
 	})
 	if principalID != "agent-1" {
-		t.Fatalf("expected agent identity fallback, got %q", principalID)
+		t.Fatalf("expected agent identity, got %q", principalID)
 	}
 }
 
