@@ -14,8 +14,9 @@ type stubIdentityResolver struct {
 	called   bool
 }
 
-func (r *stubIdentityResolver) ResolveIdentity(context.Context, string) (identity.ResolvedIdentity, error) {
+func (r *stubIdentityResolver) ResolveIdentity(_ context.Context, sourceIdentity string) (identity.ResolvedIdentity, error) {
 	r.called = true
+	r.resolved.ZitiID = sourceIdentity
 	return r.resolved, nil
 }
 
@@ -80,6 +81,9 @@ func TestResolveIdentityUsesZitiWhenBearerMissing(t *testing.T) {
 	}
 	if resolved.IdentityID != "agent-1" || resolved.IdentityType != identity.IdentityTypeAgent {
 		t.Fatalf("unexpected identity: %+v", resolved)
+	}
+	if resolved.ZitiID != "ziti-agent-identity" {
+		t.Fatalf("expected ziti id to be preserved, got %q", resolved.ZitiID)
 	}
 }
 

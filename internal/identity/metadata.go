@@ -11,6 +11,8 @@ import (
 const (
 	MetadataKeyIdentityID   = "x-identity-id"
 	MetadataKeyIdentityType = "x-identity-type"
+	MetadataKeyWorkloadID   = "x-workload-id"
+	MetadataKeyZitiID       = "x-ziti-identity-id"
 )
 
 func AppendToOutgoingContext(ctx context.Context) context.Context {
@@ -19,11 +21,18 @@ func AppendToOutgoingContext(ctx context.Context) context.Context {
 		return ctx
 	}
 
-	return metadata.AppendToOutgoingContext(
-		ctx,
+	pairs := []string{
 		MetadataKeyIdentityID, resolved.IdentityID,
 		MetadataKeyIdentityType, string(resolved.IdentityType),
-	)
+	}
+	if resolved.WorkloadID != "" {
+		pairs = append(pairs, MetadataKeyWorkloadID, resolved.WorkloadID)
+	}
+	if resolved.ZitiID != "" {
+		pairs = append(pairs, MetadataKeyZitiID, resolved.ZitiID)
+	}
+
+	return metadata.AppendToOutgoingContext(ctx, pairs...)
 }
 
 func IdentityFromIncomingContext(ctx context.Context) (ResolvedIdentity, error) {
@@ -49,7 +58,20 @@ func IdentityFromIncomingContext(ctx context.Context) (ResolvedIdentity, error) 
 	return ResolvedIdentity{
 		IdentityID:   identityID,
 		IdentityType: identityType,
+		WorkloadID:   optionalMetadataValue(md, MetadataKeyWorkloadID),
+		ZitiID:       optionalMetadataValue(md, MetadataKeyZitiID),
 	}, nil
+}
+
+func optionalMetadataValue(md metadata.MD, key string) string {
+	values := md.Get(key)
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func requiredMetadataValue(md metadata.MD, key string) (string, error) {

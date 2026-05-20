@@ -114,9 +114,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		writeProxyError(w, err)
 		return
 	}
-	log.Printf("proxy: resolved model remote_name=%s endpoint=%s", providerConfig.remoteName, providerConfig.endpoint)
+	log.Printf(
+		"proxy: resolved model model_id=%s organization_id=%s provider_organization_id=%s remote_name=%s endpoint=%s",
+		modelID,
+		providerConfig.organizationID,
+		providerConfig.organizationID,
+		providerConfig.remoteName,
+		providerConfig.endpoint,
+	)
 
-	if err := h.authorizeRequest(r.Context(), resolvedIdentity, modelID); err != nil {
+	if err := h.authorizeRequest(r.Context(), resolvedIdentity, providerConfig, modelID); err != nil {
 		writeProxyError(w, err)
 		return
 	}
@@ -218,24 +225,84 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *ht
 	h.recordMetering(meta, usage, meteringStatusSuccess)
 }
 
-func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.ResolvedIdentity, modelID string) error {
-	user := fmt.Sprintf("identity:%s", resolved.IdentityID)
+func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.ResolvedIdentity, provider providerConfig, modelID string) error {
+	principalID := authorizationPrincipalID(resolved)
+	user := fmt.Sprintf("identity:%s", principalID)
 	object := fmt.Sprintf("model:%s", modelID)
+	tuple := &authorizationv1.TupleKey{
+		User:     user,
+		Relation: "can_use",
+		Object:   object,
+	}
+	log.Printf(
+		"proxy: authorization check principal_identity_id=%s principal_identity_type=%s principal_workload_id=%s principal_ziti_identity_id=%s model_id=%s resolved_model_id=%s organization_id=%s provider_organization_id=%s tuple_user=%s tuple_relation=%s tuple_object=%s",
+		resolved.IdentityID,
+		resolved.IdentityType,
+		resolved.WorkloadID,
+		resolved.ZitiID,
+		modelID,
+		modelID,
+		provider.organizationID,
+		provider.organizationID,
+		tuple.User,
+		tuple.Relation,
+		tuple.Object,
+	)
 
 	resp, err := h.authzClient.Check(ctx, &authorizationv1.CheckRequest{
-		TupleKey: &authorizationv1.TupleKey{
-			User:     user,
-			Relation: "can_use",
-			Object:   object,
-		},
+		TupleKey: tuple,
 	})
 	if err != nil {
+		log.Printf(
+			"proxy: authorization check error principal_identity_id=%s principal_identity_type=%s principal_workload_id=%s principal_ziti_identity_id=%s model_id=%s organization_id=%s tuple_user=%s tuple_relation=%s tuple_object=%s err=%v",
+			resolved.IdentityID,
+			resolved.IdentityType,
+			resolved.WorkloadID,
+			resolved.ZitiID,
+			modelID,
+			provider.organizationID,
+			tuple.User,
+			tuple.Relation,
+			tuple.Object,
+			err,
+		)
 		return err
 	}
 	if !resp.GetAllowed() {
+		log.Printf(
+			"proxy: authorization denied principal_identity_id=%s principal_identity_type=%s principal_workload_id=%s principal_ziti_identity_id=%s model_id=%s organization_id=%s tuple_user=%s tuple_relation=%s tuple_object=%s",
+			resolved.IdentityID,
+			resolved.IdentityType,
+			resolved.WorkloadID,
+			resolved.ZitiID,
+			modelID,
+			provider.organizationID,
+			tuple.User,
+			tuple.Relation,
+			tuple.Object,
+		)
 		return ErrForbidden
 	}
+	log.Printf(
+		"proxy: authorization allowed principal_identity_id=%s principal_identity_type=%s principal_workload_id=%s principal_ziti_identity_id=%s model_id=%s organization_id=%s tuple_user=%s tuple_relation=%s tuple_object=%s",
+		resolved.IdentityID,
+		resolved.IdentityType,
+		resolved.WorkloadID,
+		resolved.ZitiID,
+		modelID,
+		provider.organizationID,
+		tuple.User,
+		tuple.Relation,
+		tuple.Object,
+	)
 	return nil
+}
+
+func authorizationPrincipalID(resolved identity.ResolvedIdentity) string {
+	if resolved.IdentityType == identity.IdentityTypeAgent && resolved.WorkloadID != "" {
+		return resolved.WorkloadID
+	}
+	return resolved.IdentityID
 }
 
 type providerConfig struct {
