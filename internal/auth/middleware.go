@@ -3,6 +3,7 @@ package auth
 import (
 	"context"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/agynio/llm-proxy/internal/apitokenresolver"
@@ -40,19 +41,23 @@ func Middleware(zitiResolver IdentityResolver, apiTokenResolver BearerTokenResol
 func resolveIdentity(ctx context.Context, authHeader string, zitiResolver IdentityResolver, apiTokenResolver BearerTokenResolver) (context.Context, error) {
 	accessToken, bearerOK := httpauth.ExtractBearerToken(authHeader)
 	if bearerOK {
-		if !apitokenresolver.HasPrefix(accessToken) {
-			return ctx, errors.New("unsupported bearer token")
-		}
-		if apiTokenResolver == nil {
+		if apitokenresolver.HasPrefix(accessToken) && apiTokenResolver != nil {
+			resolved, err := apiTokenResolver.ResolveFromToken(ctx, accessToken)
+			if err == nil {
+				return identity.WithIdentity(ctx, resolved), nil
+			}
+			if _, ok := ziticonn.SourceIdentityFromContext(ctx); !ok {
+				return ctx, err
+			}
+			log.Printf("auth: api token resolution failed; falling back to ziti identity: %v", err)
+		} else if _, ok := ziticonn.SourceIdentityFromContext(ctx); !ok {
+			if !apitokenresolver.HasPrefix(accessToken) {
+				return ctx, errors.New("unsupported bearer token")
+			}
 			return ctx, errors.New("api token resolver is not configured")
+		} else {
+			log.Printf("auth: bearer token is unsupported for api-token auth; falling back to ziti identity")
 		}
-
-		resolved, err := apiTokenResolver.ResolveFromToken(ctx, accessToken)
-		if err != nil {
-			return ctx, err
-		}
-
-		return identity.WithIdentity(ctx, resolved), nil
 	}
 
 	sourceIdentity, ok := ziticonn.SourceIdentityFromContext(ctx)
