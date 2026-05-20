@@ -58,7 +58,22 @@ func newAuthenticatedClient(token string) *http.Client {
 	}
 }
 
+func newXAPIKeyClient(token string) *http.Client {
+	return &http.Client{
+		Timeout: proxyTimeout,
+		Transport: xAPIKeyTransport{
+			token: token,
+			base:  http.DefaultTransport,
+		},
+	}
+}
+
 type bearerTransport struct {
+	token string
+	base  http.RoundTripper
+}
+
+type xAPIKeyTransport struct {
 	token string
 	base  http.RoundTripper
 }
@@ -66,6 +81,12 @@ type bearerTransport struct {
 func (t bearerTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	clone := req.Clone(req.Context())
 	clone.Header.Set("Authorization", "Bearer "+t.token)
+	return t.base.RoundTrip(clone)
+}
+
+func (t xAPIKeyTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.Header.Set("x-api-key", t.token)
 	return t.base.RoundTrip(clone)
 }
 

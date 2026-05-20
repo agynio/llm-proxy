@@ -46,3 +46,13 @@ func TestAuthValidToken(t *testing.T) {
 		t.Fatalf("expected non-401 status, got %d", resp.StatusCode)
 	}
 }
+
+func TestAuthValidXAPIKey(t *testing.T) {
+	client := newXAPIKeyClient(testAPIToken)
+	resp := doPost(t, client, responsesURL(), requestBody(t, testModelID, "hi", false))
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		t.Fatalf("expected non-401 status, got %d", resp.StatusCode)
+	}
+}
