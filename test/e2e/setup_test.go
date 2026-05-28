@@ -22,11 +22,14 @@ import (
 
 const (
 	defaultUsersAddr         = "users:50051"
-	defaultOrganizationsAddr = "tenants:50051"
+	defaultOrganizationsAddr = "organizations:50051"
 	defaultLLMAddr           = "llm:50051"
 	setupTimeout             = 30 * time.Second
 	apiTokenName             = "e2e-llm-proxy"
 	llmProviderEndpoint      = "https://testllm.dev/v1/org/agynio/suite/agn/responses"
+	metadataIdentityIDKey    = "x-identity-id"
+	metadataIdentityTypeKey  = "x-identity-type"
+	identityTypeUser         = "user"
 )
 
 var (
@@ -87,13 +90,13 @@ func setupFixtures(ctx context.Context) (func(), error) {
 	defer llmConn.Close()
 	llmClient := llmv1.NewLLMServiceClient(llmConn)
 
-	modelID, providerID, err := createModel(ctx, llmClient, orgID, "e2e-simple-hello")
+	modelID, providerID, err := createModel(ctx, llmClient, identityID, orgID, "e2e-simple-hello")
 	if err != nil {
 		return nil, err
 	}
 	testModelID = modelID
 
-	unauthorizedModelID, unauthorizedProviderID, err := createModel(ctx, llmClient, unauthorizedOrgID, "e2e-simple-hello-unauthorized")
+	unauthorizedModelID, unauthorizedProviderID, err := createModel(ctx, llmClient, unauthorizedIdentityID, unauthorizedOrgID, "e2e-simple-hello-unauthorized")
 	if err != nil {
 		return nil, err
 	}
@@ -101,7 +104,10 @@ func setupFixtures(ctx context.Context) (func(), error) {
 
 	cleanup := func() {
 		cleanupCtx := context.Background()
-		cleanupLLM(cleanupCtx, llmAddr, []string{testModelID, testUnauthorizedModelID}, []string{providerID, unauthorizedProviderID})
+		cleanupLLM(cleanupCtx, llmAddr, []llmCleanupSpec{
+			{modelID: testModelID, providerID: providerID, identityID: identityID},
+			{modelID: testUnauthorizedModelID, providerID: unauthorizedProviderID, identityID: unauthorizedIdentityID},
+		})
 		cleanupOrganizations(cleanupCtx, orgAddr, []orgCleanupSpec{
 			{organizationID: orgID, identityID: identityID},
 			{organizationID: unauthorizedOrgID, identityID: unauthorizedIdentityID},
@@ -180,10 +186,11 @@ func createOrganization(ctx context.Context, client organizationsv1.Organization
 	return orgID, nil
 }
 
-func createModel(ctx context.Context, client llmv1.LLMServiceClient, orgID string, name string) (string, string, error) {
+func createModel(ctx context.Context, client llmv1.LLMServiceClient, identityID string, orgID string, name string) (string, string, error) {
 	callCtx, cancel := context.WithTimeout(ctx, setupTimeout)
 	defer cancel()
 
+	callCtx = withIdentity(callCtx, identityID)
 	providerResp, err := client.CreateLLMProvider(callCtx, &llmv1.CreateLLMProviderRequest{
 		Endpoint:       llmProviderEndpoint,
 		Token:          "not-needed",
@@ -221,13 +228,22 @@ func createModel(ctx context.Context, client llmv1.LLMServiceClient, orgID strin
 }
 
 func withIdentity(ctx context.Context, identityID string) context.Context {
-	md := metadata.New(map[string]string{"x-identity-id": identityID})
+	md := metadata.New(map[string]string{
+		metadataIdentityIDKey:   identityID,
+		metadataIdentityTypeKey: identityTypeUser,
+	})
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
 type orgCleanupSpec struct {
 	organizationID string
 	identityID     string
+}
+
+type llmCleanupSpec struct {
+	modelID    string
+	providerID string
+	identityID string
 }
 
 func cleanupAPIToken(ctx context.Context, addr string, identityID string, tokenID string) {
@@ -270,7 +286,7 @@ func cleanupOrganizations(ctx context.Context, addr string, specs []orgCleanupSp
 	}
 }
 
-func cleanupLLM(ctx context.Context, addr string, modelIDs []string, providerIDs []string) {
+func cleanupLLM(ctx context.Context, addr string, specs []llmCleanupSpec) {
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		logCleanupError("connect llm service", err)
@@ -279,22 +295,24 @@ func cleanupLLM(ctx context.Context, addr string, modelIDs []string, providerIDs
 	defer conn.Close()
 	client := llmv1.NewLLMServiceClient(conn)
 
-	for _, modelID := range modelIDs {
-		if modelID == "" {
+	for _, spec := range specs {
+		if spec.modelID == "" {
 			continue
 		}
 		callCtx, cancel := context.WithTimeout(ctx, setupTimeout)
-		_, err := client.DeleteModel(callCtx, &llmv1.DeleteModelRequest{Id: modelID})
+		callCtx = withIdentity(callCtx, spec.identityID)
+		_, err := client.DeleteModel(callCtx, &llmv1.DeleteModelRequest{Id: spec.modelID})
 		cancel()
 		logCleanupError("delete model", err)
 	}
 
-	for _, providerID := range providerIDs {
-		if providerID == "" {
+	for _, spec := range specs {
+		if spec.providerID == "" {
 			continue
 		}
 		callCtx, cancel := context.WithTimeout(ctx, setupTimeout)
-		_, err := client.DeleteLLMProvider(callCtx, &llmv1.DeleteLLMProviderRequest{Id: providerID})
+		callCtx = withIdentity(callCtx, spec.identityID)
+		_, err := client.DeleteLLMProvider(callCtx, &llmv1.DeleteLLMProviderRequest{Id: spec.providerID})
 		cancel()
 		logCleanupError("delete llm provider", err)
 	}
