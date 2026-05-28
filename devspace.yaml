@@ -83,9 +83,9 @@ functions:
     EOF
     )"
   patch_agents_orchestrator: |-
-    echo "Patching agents-orchestrator to target llm-proxy service..."
+    echo "Patching agents-orchestrator to target llm-proxy over Ziti..."
     kubectl set env deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} \
-      AGENT_LLM_BASE_URL=http://llm-proxy-llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080/v1
+      AGENT_LLM_BASE_URL=http://llm-proxy.ziti/v1
     kubectl rollout status deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} --timeout=120s
 
   run_llm_proxy_e2e: |-
