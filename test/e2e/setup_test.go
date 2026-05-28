@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	authorizationv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/authorization/v1"
 	organizationsv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/organizations/v1"
 	usersv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/users/v1"
 	"github.com/google/uuid"
@@ -28,6 +29,7 @@ import (
 const (
 	defaultUsersAddr         = "users:50051"
 	defaultOrganizationsAddr = "organizations:50051"
+	defaultAuthorizationAddr = "authorization:50051"
 	defaultGatewayBaseURL    = "http://gateway-gateway.platform.svc.cluster.local:8080"
 	setupTimeout             = 30 * time.Second
 	apiTokenName             = "e2e-llm-proxy"
@@ -36,6 +38,8 @@ const (
 	metadataIdentityIDKey    = "x-identity-id"
 	metadataIdentityTypeKey  = "x-identity-type"
 	identityTypeUser         = "user"
+	clusterAdminIdentityID   = "a3c1e9d2-7f4b-5e1a-9c3d-2b8f6a4e7d10"
+	modelAccessRelation      = "can_use"
 )
 
 var (
@@ -47,6 +51,7 @@ var (
 func setupFixtures(ctx context.Context) (func(), error) {
 	usersAddr := envOrDefault("USERS_ADDR", defaultUsersAddr)
 	orgAddr := envOrDefault("ORGANIZATIONS_ADDR", defaultOrganizationsAddr)
+	authzAddr := envOrDefault("AUTHORIZATION_ADDR", envOrDefault("AUTHORIZATION_ADDRESS", defaultAuthorizationAddr))
 	gatewayBaseURL, err := parseGatewayBaseURL(envOrDefault("AGYN_BASE_URL", defaultGatewayBaseURL))
 	if err != nil {
 		return nil, err
@@ -108,8 +113,21 @@ func setupFixtures(ctx context.Context) (func(), error) {
 	}
 	testUnauthorizedModelID = unauthorizedModelID
 
+	authzConn, err := grpc.NewClient(authzAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, fmt.Errorf("connect authorization service: %w", err)
+	}
+	defer authzConn.Close()
+	authzClient := authorizationv1.NewAuthorizationServiceClient(authzConn)
+
+	modelAccess := modelAccessTuple(identityID, modelID)
+	if err := grantModelAccess(ctx, authzClient, modelAccess); err != nil {
+		return nil, err
+	}
+
 	cleanup := func() {
 		cleanupCtx := context.Background()
+		cleanupModelAccess(cleanupCtx, authzAddr, modelAccess)
 		cleanupLLM(cleanupCtx, gatewayBaseURL, []llmCleanupSpec{
 			{modelID: testModelID, providerID: providerID, apiToken: apiToken},
 			{modelID: testUnauthorizedModelID, providerID: unauthorizedProviderID, apiToken: unauthorizedAPIToken},
@@ -236,15 +254,65 @@ func withIdentity(ctx context.Context, identityID string) context.Context {
 	return metadata.NewOutgoingContext(ctx, md)
 }
 
+func withClusterAdminIdentity(ctx context.Context) context.Context {
+	return withIdentity(ctx, clusterAdminIdentityID)
+}
+
 type orgCleanupSpec struct {
 	organizationID string
 	identityID     string
+}
+
+type modelAccessSpec struct {
+	identityID string
+	modelID    string
 }
 
 type llmCleanupSpec struct {
 	modelID    string
 	providerID string
 	apiToken   string
+}
+
+func grantModelAccess(ctx context.Context, client authorizationv1.AuthorizationServiceClient, spec modelAccessSpec) error {
+	callCtx, cancel := context.WithTimeout(ctx, setupTimeout)
+	defer cancel()
+	_, err := client.Write(withClusterAdminIdentity(callCtx), &authorizationv1.WriteRequest{
+		Writes: []*authorizationv1.TupleKey{modelAccessTupleKey(spec)},
+	})
+	if err != nil {
+		return fmt.Errorf("grant model access: %w", err)
+	}
+	return nil
+}
+
+func cleanupModelAccess(ctx context.Context, addr string, spec modelAccessSpec) {
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		logCleanupError("connect authorization service", err)
+		return
+	}
+	defer conn.Close()
+	client := authorizationv1.NewAuthorizationServiceClient(conn)
+
+	callCtx, cancel := context.WithTimeout(ctx, setupTimeout)
+	defer cancel()
+	_, err = client.Write(withClusterAdminIdentity(callCtx), &authorizationv1.WriteRequest{
+		Deletes: []*authorizationv1.TupleKey{modelAccessTupleKey(spec)},
+	})
+	logCleanupError("delete model access", err)
+}
+
+func modelAccessTuple(identityID string, modelID string) modelAccessSpec {
+	return modelAccessSpec{identityID: identityID, modelID: modelID}
+}
+
+func modelAccessTupleKey(spec modelAccessSpec) *authorizationv1.TupleKey {
+	return &authorizationv1.TupleKey{
+		User:     "identity:" + spec.identityID,
+		Relation: modelAccessRelation,
+		Object:   "model:" + spec.modelID,
+	}
 }
 
 func cleanupAPIToken(ctx context.Context, addr string, identityID string, tokenID string) {
