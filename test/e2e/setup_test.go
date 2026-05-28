@@ -3,13 +3,18 @@
 package e2e
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
+	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
-	llmv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/llm/v1"
 	organizationsv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/organizations/v1"
 	usersv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/users/v1"
 	"github.com/google/uuid"
@@ -23,10 +28,11 @@ import (
 const (
 	defaultUsersAddr         = "users:50051"
 	defaultOrganizationsAddr = "organizations:50051"
-	defaultLLMAddr           = "llm:50051"
+	defaultGatewayBaseURL    = "http://gateway-gateway.platform.svc.cluster.local:8080"
 	setupTimeout             = 30 * time.Second
 	apiTokenName             = "e2e-llm-proxy"
 	llmProviderEndpoint      = "https://testllm.dev/v1/org/agynio/suite/agn/responses"
+	llmGatewayServicePath    = "agynio.api.gateway.v1.LLMGateway"
 	metadataIdentityIDKey    = "x-identity-id"
 	metadataIdentityTypeKey  = "x-identity-type"
 	identityTypeUser         = "user"
@@ -41,7 +47,10 @@ var (
 func setupFixtures(ctx context.Context) (func(), error) {
 	usersAddr := envOrDefault("USERS_ADDR", defaultUsersAddr)
 	orgAddr := envOrDefault("ORGANIZATIONS_ADDR", defaultOrganizationsAddr)
-	llmAddr := envOrDefault("LLM_ADDR", defaultLLMAddr)
+	gatewayBaseURL, err := parseGatewayBaseURL(envOrDefault("AGYN_BASE_URL", defaultGatewayBaseURL))
+	if err != nil {
+		return nil, err
+	}
 
 	usersConn, err := grpc.NewClient(usersAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
@@ -83,20 +92,17 @@ func setupFixtures(ctx context.Context) (func(), error) {
 		return nil, err
 	}
 
-	llmConn, err := grpc.NewClient(llmAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, fmt.Errorf("connect llm service: %w", err)
-	}
-	defer llmConn.Close()
-	llmClient := llmv1.NewLLMServiceClient(llmConn)
-
-	modelID, providerID, err := createModel(ctx, llmClient, identityID, orgID, "e2e-simple-hello")
+	modelID, providerID, err := createModel(ctx, gatewayBaseURL, apiToken, orgID, "e2e-simple-hello")
 	if err != nil {
 		return nil, err
 	}
 	testModelID = modelID
 
-	unauthorizedModelID, unauthorizedProviderID, err := createModel(ctx, llmClient, unauthorizedIdentityID, unauthorizedOrgID, "e2e-simple-hello-unauthorized")
+	unauthorizedAPIToken, unauthorizedAPITokenID, err := createAPIToken(ctx, usersClient, unauthorizedIdentityID, apiTokenName+"-unauthorized")
+	if err != nil {
+		return nil, err
+	}
+	unauthorizedModelID, unauthorizedProviderID, err := createModel(ctx, gatewayBaseURL, unauthorizedAPIToken, unauthorizedOrgID, "e2e-simple-hello-unauthorized")
 	if err != nil {
 		return nil, err
 	}
@@ -104,14 +110,15 @@ func setupFixtures(ctx context.Context) (func(), error) {
 
 	cleanup := func() {
 		cleanupCtx := context.Background()
-		cleanupLLM(cleanupCtx, llmAddr, []llmCleanupSpec{
-			{modelID: testModelID, providerID: providerID, identityID: identityID},
-			{modelID: testUnauthorizedModelID, providerID: unauthorizedProviderID, identityID: unauthorizedIdentityID},
+		cleanupLLM(cleanupCtx, gatewayBaseURL, []llmCleanupSpec{
+			{modelID: testModelID, providerID: providerID, apiToken: apiToken},
+			{modelID: testUnauthorizedModelID, providerID: unauthorizedProviderID, apiToken: unauthorizedAPIToken},
 		})
 		cleanupOrganizations(cleanupCtx, orgAddr, []orgCleanupSpec{
 			{organizationID: orgID, identityID: identityID},
 			{organizationID: unauthorizedOrgID, identityID: unauthorizedIdentityID},
 		})
+		cleanupAPIToken(cleanupCtx, usersAddr, unauthorizedIdentityID, unauthorizedAPITokenID)
 		cleanupAPIToken(cleanupCtx, usersAddr, identityID, apiTokenID)
 	}
 
@@ -186,41 +193,35 @@ func createOrganization(ctx context.Context, client organizationsv1.Organization
 	return orgID, nil
 }
 
-func createModel(ctx context.Context, client llmv1.LLMServiceClient, identityID string, orgID string, name string) (string, string, error) {
+func createModel(ctx context.Context, gatewayBaseURL string, apiToken string, orgID string, name string) (string, string, error) {
 	callCtx, cancel := context.WithTimeout(ctx, setupTimeout)
 	defer cancel()
-	callCtx = withIdentity(callCtx, identityID)
 
-	providerResp, err := client.CreateLLMProvider(callCtx, &llmv1.CreateLLMProviderRequest{
-		Endpoint:       llmProviderEndpoint,
-		Token:          "not-needed",
-		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
-		OrganizationId: orgID,
+	providerResp, err := postGatewayConnect[gatewayCreateLLMProviderResponse](callCtx, gatewayBaseURL, apiToken, "CreateLLMProvider", map[string]string{
+		"endpoint":       llmProviderEndpoint,
+		"token":          "not-needed",
+		"authMethod":     "AUTH_METHOD_BEARER",
+		"organizationId": orgID,
+		"protocol":       "PROTOCOL_RESPONSES",
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("create llm provider: %w", err)
 	}
-	if providerResp == nil || providerResp.GetProvider() == nil || providerResp.GetProvider().GetMeta() == nil {
-		return "", "", fmt.Errorf("create llm provider: missing provider metadata")
-	}
-	providerID := strings.TrimSpace(providerResp.GetProvider().GetMeta().GetId())
+	providerID := strings.TrimSpace(providerResp.Provider.Meta.ID)
 	if providerID == "" {
 		return "", "", fmt.Errorf("create llm provider: id missing")
 	}
 
-	modelResp, err := client.CreateModel(callCtx, &llmv1.CreateModelRequest{
-		Name:           name,
-		LlmProviderId:  providerID,
-		RemoteName:     "simple-hello",
-		OrganizationId: orgID,
+	modelResp, err := postGatewayConnect[gatewayCreateModelResponse](callCtx, gatewayBaseURL, apiToken, "CreateModel", map[string]string{
+		"name":           name,
+		"llmProviderId":  providerID,
+		"remoteName":     "simple-hello",
+		"organizationId": orgID,
 	})
 	if err != nil {
 		return "", "", fmt.Errorf("create model %s: %w", name, err)
 	}
-	if modelResp == nil || modelResp.GetModel() == nil || modelResp.GetModel().GetMeta() == nil {
-		return "", "", fmt.Errorf("create model %s: missing model metadata", name)
-	}
-	modelID := strings.TrimSpace(modelResp.GetModel().GetMeta().GetId())
+	modelID := strings.TrimSpace(modelResp.Model.Meta.ID)
 	if modelID == "" {
 		return "", "", fmt.Errorf("create model %s: id missing", name)
 	}
@@ -243,7 +244,7 @@ type orgCleanupSpec struct {
 type llmCleanupSpec struct {
 	modelID    string
 	providerID string
-	identityID string
+	apiToken   string
 }
 
 func cleanupAPIToken(ctx context.Context, addr string, identityID string, tokenID string) {
@@ -286,24 +287,14 @@ func cleanupOrganizations(ctx context.Context, addr string, specs []orgCleanupSp
 	}
 }
 
-func cleanupLLM(ctx context.Context, addr string, specs []llmCleanupSpec) {
-	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		logCleanupError("connect llm service", err)
-		return
-	}
-	defer conn.Close()
-	client := llmv1.NewLLMServiceClient(conn)
-
+func cleanupLLM(ctx context.Context, gatewayBaseURL string, specs []llmCleanupSpec) {
 	for _, spec := range specs {
 		if spec.modelID == "" {
 			continue
 		}
 		callCtx, cancel := context.WithTimeout(ctx, setupTimeout)
-		callCtx = withIdentity(callCtx, spec.identityID)
-		_, err := client.DeleteModel(callCtx, &llmv1.DeleteModelRequest{Id: spec.modelID})
+		postGatewayConnectBestEffort(callCtx, gatewayBaseURL, spec.apiToken, "DeleteModel", map[string]string{"id": spec.modelID})
 		cancel()
-		logCleanupError("delete model", err)
 	}
 
 	for _, spec := range specs {
@@ -311,11 +302,112 @@ func cleanupLLM(ctx context.Context, addr string, specs []llmCleanupSpec) {
 			continue
 		}
 		callCtx, cancel := context.WithTimeout(ctx, setupTimeout)
-		callCtx = withIdentity(callCtx, spec.identityID)
-		_, err := client.DeleteLLMProvider(callCtx, &llmv1.DeleteLLMProviderRequest{Id: spec.providerID})
+		postGatewayConnectBestEffort(callCtx, gatewayBaseURL, spec.apiToken, "DeleteLLMProvider", map[string]string{"id": spec.providerID})
 		cancel()
-		logCleanupError("delete llm provider", err)
 	}
+}
+
+func postGatewayConnect[T any](ctx context.Context, gatewayBaseURL string, apiToken string, method string, payload any) (T, error) {
+	var response T
+	body, statusCode, err := postGatewayConnectRaw(ctx, gatewayBaseURL, apiToken, method, payload)
+	if err != nil {
+		return response, err
+	}
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		return response, fmt.Errorf("gateway %s failed with status %d: %s", method, statusCode, body)
+	}
+	if err := json.Unmarshal([]byte(body), &response); err != nil {
+		return response, fmt.Errorf("decode gateway %s response: %w", method, err)
+	}
+	return response, nil
+}
+
+func postGatewayConnectBestEffort(ctx context.Context, gatewayBaseURL string, apiToken string, method string, payload any) {
+	_, _, _ = postGatewayConnectRaw(ctx, gatewayBaseURL, apiToken, method, payload)
+}
+
+func postGatewayConnectRaw(ctx context.Context, gatewayBaseURL string, apiToken string, method string, payload any) (string, int, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return "", 0, fmt.Errorf("marshal gateway %s request: %w", method, err)
+	}
+
+	endpoint, err := gatewayLLMConnectEndpoint(gatewayBaseURL, method)
+	if err != nil {
+		return "", 0, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", 0, fmt.Errorf("build gateway %s request: %w", method, err)
+	}
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Connect-Protocol-Version", "1")
+	request.Header.Set("Authorization", "Bearer "+apiToken)
+
+	response, err := gatewayHTTPClient(gatewayBaseURL).Do(request)
+	if err != nil {
+		return "", 0, fmt.Errorf("post gateway %s: %w", method, err)
+	}
+	defer response.Body.Close()
+
+	responseBody, err := io.ReadAll(response.Body)
+	if err != nil {
+		return "", 0, fmt.Errorf("read gateway %s response: %w", method, err)
+	}
+	return strings.TrimSpace(string(responseBody)), response.StatusCode, nil
+}
+
+func gatewayLLMConnectEndpoint(gatewayBaseURL string, method string) (string, error) {
+	return url.JoinPath(gatewayBaseURL, llmGatewayServicePath, method)
+}
+
+func gatewayHTTPClient(gatewayBaseURL string) *http.Client {
+	transport := http.DefaultTransport
+	parsed, err := url.Parse(gatewayBaseURL)
+	if err == nil && parsed.Scheme == "https" {
+		baseTransport, ok := http.DefaultTransport.(*http.Transport)
+		if !ok {
+			panic("unexpected default transport type")
+		}
+		cloned := baseTransport.Clone()
+		cloned.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+		transport = cloned
+	}
+	return &http.Client{Timeout: setupTimeout, Transport: transport}
+}
+
+func parseGatewayBaseURL(value string) (string, error) {
+	baseURL := strings.TrimRight(strings.TrimSpace(value), "/")
+	if baseURL == "" {
+		return "", fmt.Errorf("AGYN_BASE_URL empty")
+	}
+	parsed, err := url.Parse(baseURL)
+	if err != nil {
+		return "", fmt.Errorf("parse AGYN_BASE_URL: %w", err)
+	}
+	if parsed.Scheme != "http" && parsed.Scheme != "https" {
+		return "", fmt.Errorf("AGYN_BASE_URL must start with http or https")
+	}
+	if parsed.Host == "" {
+		return "", fmt.Errorf("AGYN_BASE_URL missing host")
+	}
+	return baseURL, nil
+}
+
+type gatewayCreateLLMProviderResponse struct {
+	Provider gatewayLLMEntity `json:"provider"`
+}
+
+type gatewayCreateModelResponse struct {
+	Model gatewayLLMEntity `json:"model"`
+}
+
+type gatewayLLMEntity struct {
+	Meta gatewayEntityMeta `json:"meta"`
+}
+
+type gatewayEntityMeta struct {
+	ID string `json:"id"`
 }
 
 func logCleanupError(action string, err error) {
