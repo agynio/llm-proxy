@@ -89,6 +89,51 @@ functions:
     kubectl rollout status deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} --timeout=120s
 
   run_llm_proxy_e2e: |-
+    bootstrap_dir="${GITHUB_WORKSPACE:-$(pwd)}/bootstrap"
+    k8s_stack="${bootstrap_dir}/stacks/k8s"
+    platform_stack="${bootstrap_dir}/stacks/platform"
+    apps_stack="${bootstrap_dir}/stacks/apps"
+
+    if [ -z "${AGYN_BASE_URL:-}" ]; then
+      if [ ! -d "${k8s_stack}" ]; then
+        echo "ERROR: AGYN_BASE_URL is not set and ${k8s_stack} does not exist." >&2
+        exit 1
+      fi
+      domain="$(terraform -chdir="${k8s_stack}" output -raw domain)"
+      ingress_port="$(terraform -chdir="${k8s_stack}" output -raw ingress_port)"
+      if [ -z "${domain}" ] || [ -z "${ingress_port}" ]; then
+        echo "ERROR: Bootstrap k8s outputs domain or ingress_port are empty." >&2
+        exit 1
+      fi
+      export AGYN_BASE_URL="https://gateway.${domain}:${ingress_port}"
+    fi
+
+    if [ -z "${AGYN_API_TOKEN:-}" ]; then
+      if [ ! -d "${platform_stack}" ]; then
+        echo "ERROR: AGYN_API_TOKEN is not set and ${platform_stack} does not exist." >&2
+        exit 1
+      fi
+      AGYN_API_TOKEN="$(terraform -chdir="${platform_stack}" output -raw cluster_admin_api_token)"
+      if [ -z "${AGYN_API_TOKEN}" ]; then
+        echo "ERROR: Terraform output cluster_admin_api_token is empty." >&2
+        exit 1
+      fi
+      export AGYN_API_TOKEN
+    fi
+
+    if [ -z "${AGYN_ORGANIZATION_ID:-}" ]; then
+      if [ ! -d "${apps_stack}" ]; then
+        echo "ERROR: AGYN_ORGANIZATION_ID is not set and ${apps_stack} does not exist." >&2
+        exit 1
+      fi
+      AGYN_ORGANIZATION_ID="$(terraform -chdir="${apps_stack}" output -raw bootstrap_organization_id)"
+      if [ -z "${AGYN_ORGANIZATION_ID}" ]; then
+        echo "ERROR: Terraform output bootstrap_organization_id is empty." >&2
+        exit 1
+      fi
+      export AGYN_ORGANIZATION_ID
+    fi
+
     cd e2e
     export AGYN_AGENT_IMAGE="${AGYN_AGENT_IMAGE:-ghcr.io/agynio/agent-runtime:v1.0.0}"
     export CODEX_INIT_IMAGE="${CODEX_INIT_IMAGE:-ghcr.io/agynio/agent-init-codex:latest}"

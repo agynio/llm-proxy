@@ -189,8 +189,8 @@ func createOrganization(ctx context.Context, client organizationsv1.Organization
 func createModel(ctx context.Context, client llmv1.LLMServiceClient, identityID string, orgID string, name string) (string, string, error) {
 	callCtx, cancel := context.WithTimeout(ctx, setupTimeout)
 	defer cancel()
-
 	callCtx = withIdentity(callCtx, identityID)
+
 	providerResp, err := client.CreateLLMProvider(callCtx, &llmv1.CreateLLMProviderRequest{
 		Endpoint:       llmProviderEndpoint,
 		Token:          "not-needed",
