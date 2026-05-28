@@ -54,6 +54,7 @@ functions:
                   buf generate buf.build/agynio/api \
                     --path agynio/api/llm/v1 \
                     --path agynio/api/users/v1 \
+                    --path agynio/api/organizations/v1 \
                     --path agynio/api/authorization/v1 \
                     --path agynio/api/metering/v1 \
                     --path agynio/api/ziti_management/v1 \
@@ -82,12 +83,143 @@ functions:
     EOF
     )"
   patch_agents_orchestrator: |-
-    echo "Patching agents-orchestrator to target llm-proxy service..."
+    echo "Patching agents-orchestrator to target llm-proxy over Ziti..."
     kubectl set env deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} \
-      AGENT_LLM_BASE_URL=http://llm-proxy-llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080/v1
+      AGENT_LLM_BASE_URL=http://llm-proxy.ziti/v1
     kubectl rollout status deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} --timeout=120s
 
   run_llm_proxy_e2e: |-
+    bootstrap_dir="${GITHUB_WORKSPACE:-$(pwd)}/bootstrap"
+    platform_stack="${bootstrap_dir}/stacks/platform"
+    apps_stack="${bootstrap_dir}/stacks/apps"
+
+    if [ -z "${AGYN_API_TOKEN:-}" ]; then
+      if [ ! -d "${platform_stack}" ]; then
+        echo "ERROR: AGYN_API_TOKEN is not set and ${platform_stack} does not exist." >&2
+        exit 1
+      fi
+      AGYN_API_TOKEN="$(terraform -chdir="${platform_stack}" output -raw cluster_admin_api_token)"
+      if [ -z "${AGYN_API_TOKEN}" ]; then
+        echo "ERROR: Terraform output cluster_admin_api_token is empty." >&2
+        exit 1
+      fi
+      export AGYN_API_TOKEN
+    fi
+
+    if [ -z "${AGYN_ORGANIZATION_ID:-}" ]; then
+      if [ ! -d "${apps_stack}" ]; then
+        echo "ERROR: AGYN_ORGANIZATION_ID is not set and ${apps_stack} does not exist." >&2
+        exit 1
+      fi
+      AGYN_ORGANIZATION_ID="$(terraform -chdir="${apps_stack}" output -raw bootstrap_organization_id)"
+      if [ -z "${AGYN_ORGANIZATION_ID}" ]; then
+        echo "ERROR: Terraform output bootstrap_organization_id is empty." >&2
+        exit 1
+      fi
+      export AGYN_ORGANIZATION_ID
+    fi
+
+    if [ -z "${AGYN_MODEL_ID:-}" ]; then
+      gateway_setup_url="${AGYN_BASE_URL:-}"
+      if [ -z "${gateway_setup_url}" ]; then
+        k8s_stack="${bootstrap_dir}/stacks/k8s"
+        if [ ! -d "${k8s_stack}" ]; then
+          echo "ERROR: AGYN_MODEL_ID is not set and ${k8s_stack} does not exist." >&2
+          exit 1
+        fi
+        domain="$(terraform -chdir="${k8s_stack}" output -raw domain)"
+        ingress_port="$(terraform -chdir="${k8s_stack}" output -raw ingress_port)"
+        if [ -z "${domain}" ] || [ -z "${ingress_port}" ]; then
+          echo "ERROR: Bootstrap k8s outputs domain or ingress_port are empty." >&2
+          exit 1
+        fi
+        gateway_setup_url="https://gateway.${domain}:${ingress_port}"
+      fi
+
+      list_models_payload=$(cat <<EOF
+    {"organizationId":"${AGYN_ORGANIZATION_ID}","llmProviderId":"","pageSize":200,"pageToken":""}
+    EOF
+      )
+      model_id="$(curl -fsS -k \
+        -H 'Content-Type: application/json' \
+        -H 'Connect-Protocol-Version: 1' \
+        -H "Authorization: Bearer ${AGYN_API_TOKEN}" \
+        -d "${list_models_payload}" \
+        "${gateway_setup_url}/agynio.api.gateway.v1.LLMGateway/ListModels" \
+        | python3 -c "$(cat <<'PY'
+    import json
+    import sys
+
+    payload = json.load(sys.stdin)
+    for model in payload.get("models") or []:
+        meta = model.get("meta") or {}
+        model_id = meta.get("id") or model.get("id") or ""
+        if model_id:
+            print(model_id)
+            break
+    PY
+    )")"
+
+      if [ -z "${model_id}" ]; then
+        now="$(date +%s)"
+        create_provider_payload=$(cat <<EOF
+    {"endpoint":"https://testllm.dev/v1/org/agynio/suite/agn/responses","authMethod":"AUTH_METHOD_BEARER","token":"e2e-token-${now}","organizationId":"${AGYN_ORGANIZATION_ID}","protocol":"PROTOCOL_RESPONSES"}
+    EOF
+        )
+        provider_id="$(curl -fsS -k \
+          -H 'Content-Type: application/json' \
+          -H 'Connect-Protocol-Version: 1' \
+          -H "Authorization: Bearer ${AGYN_API_TOKEN}" \
+          -d "${create_provider_payload}" \
+          "${gateway_setup_url}/agynio.api.gateway.v1.LLMGateway/CreateLLMProvider" \
+          | python3 -c "$(cat <<'PY'
+    import json
+    import sys
+
+    payload = json.load(sys.stdin)
+    provider = payload.get("provider") or {}
+    meta = provider.get("meta") or {}
+    provider_id = meta.get("id") or provider.get("id") or ""
+    if provider_id:
+        print(provider_id)
+    PY
+    )")"
+        if [ -z "${provider_id}" ]; then
+          echo "ERROR: CreateLLMProvider did not return an id." >&2
+          exit 1
+        fi
+
+        create_model_payload=$(cat <<EOF
+    {"name":"E2E LLM Proxy Model ${now}","llmProviderId":"${provider_id}","remoteName":"simple-hello","organizationId":"${AGYN_ORGANIZATION_ID}"}
+    EOF
+        )
+        model_id="$(curl -fsS -k \
+          -H 'Content-Type: application/json' \
+          -H 'Connect-Protocol-Version: 1' \
+          -H "Authorization: Bearer ${AGYN_API_TOKEN}" \
+          -d "${create_model_payload}" \
+          "${gateway_setup_url}/agynio.api.gateway.v1.LLMGateway/CreateModel" \
+          | python3 -c "$(cat <<'PY'
+    import json
+    import sys
+
+    payload = json.load(sys.stdin)
+    model = payload.get("model") or {}
+    meta = model.get("meta") or {}
+    model_id = meta.get("id") or model.get("id") or ""
+    if model_id:
+        print(model_id)
+    PY
+    )")"
+      fi
+
+      if [ -z "${model_id}" ]; then
+        echo "ERROR: Unable to determine AGYN_MODEL_ID." >&2
+        exit 1
+      fi
+      export AGYN_MODEL_ID="${model_id}"
+    fi
+
     cd e2e
     export AGYN_AGENT_IMAGE="${AGYN_AGENT_IMAGE:-ghcr.io/agynio/agent-runtime:v1.0.0}"
     export CODEX_INIT_IMAGE="${CODEX_INIT_IMAGE:-ghcr.io/agynio/agent-init-codex:latest}"
