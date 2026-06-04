@@ -1,5 +1,5 @@
 nameOverride: ""
-fullnameOverride: ""
+fullnameOverride: "llm-proxy"
 
 global:
   imageRegistry: ""
