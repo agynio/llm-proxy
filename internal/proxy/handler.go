@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
@@ -167,14 +168,14 @@ func (h *Handler) forwardResponse(w http.ResponseWriter, req *http.Request, meta
 	log.Printf("proxy: upstream response status=%d", resp.StatusCode)
 	defer closeResponseBody(resp.Body)
 
-	body, err := io.ReadAll(resp.Body)
+	body, responseHeaders, err := readProviderResponse(resp)
 	if err != nil {
 		h.recordMetering(meta, nil, meteringStatusFailed)
 		writeProxyError(w, fmt.Errorf("read response: %w", err))
 		return
 	}
 
-	copyHeaders(w.Header(), resp.Header, nil)
+	copyHeaders(w.Header(), responseHeaders, nil)
 	w.WriteHeader(resp.StatusCode)
 	if _, err := w.Write(body); err != nil {
 		log.Printf("proxy: forward response failed: %v", err)
@@ -418,11 +419,31 @@ func shouldStripProviderRequestHeader(key string, connectionHeaders map[string]s
 	}
 
 	switch canonical {
-	case "Host", "Content-Length", "Connection", "Transfer-Encoding", "Keep-Alive", "Te", "Trailer", "Upgrade", "Authorization", "X-Api-Key":
+	case "Host", "Content-Length", "Connection", "Transfer-Encoding", "Keep-Alive", "Te", "Trailer", "Upgrade", "Authorization", "X-Api-Key", "Accept-Encoding":
 		return true
 	default:
 		return false
 	}
+}
+
+func readProviderResponse(resp *http.Response) ([]byte, http.Header, error) {
+	headers := resp.Header.Clone()
+	reader := resp.Body
+	if strings.EqualFold(strings.TrimSpace(resp.Header.Get("Content-Encoding")), "gzip") {
+		gzipReader, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, nil, fmt.Errorf("decode gzip response: %w", err)
+		}
+		defer closeResponseBody(gzipReader)
+		reader = gzipReader
+		headers.Del("Content-Encoding")
+		headers.Del("Content-Length")
+	}
+	body, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	return body, headers, nil
 }
 
 func extractRawModelValue(body []byte) string {

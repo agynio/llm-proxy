@@ -1,6 +1,8 @@
 package proxy
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -8,6 +10,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	authorizationv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/authorization/v1"
 	llmv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/llm/v1"
@@ -47,9 +50,14 @@ func (f *fakeAuthzClient) Check(_ context.Context, req *authorizationv1.CheckReq
 	return f.resp, nil
 }
 
-type fakeMeteringClient struct{}
+type fakeMeteringClient struct {
+	records chan []*meteringv1.UsageRecord
+}
 
-func (f *fakeMeteringClient) Record(_ context.Context, _ *meteringv1.RecordRequest, _ ...grpc.CallOption) (*meteringv1.RecordResponse, error) {
+func (f *fakeMeteringClient) Record(_ context.Context, req *meteringv1.RecordRequest, _ ...grpc.CallOption) (*meteringv1.RecordResponse, error) {
+	if f.records != nil {
+		f.records <- req.GetRecords()
+	}
 	return &meteringv1.RecordResponse{}, nil
 }
 
@@ -148,6 +156,107 @@ func TestHandlerForwardNonStream(t *testing.T) {
 	if authzClient.lastReq.GetTupleKey().GetObject() != "model:"+modelID.String() {
 		t.Fatalf("unexpected authz object %q", authzClient.lastReq.GetTupleKey().GetObject())
 	}
+}
+
+func TestHandlerForwardNonStreamGzipProviderResponse(t *testing.T) {
+	modelID := uuid.New()
+	responseBody := []byte(`{"id":"resp-1","usage":{"input_tokens":12,"cached_tokens":3,"output_tokens":4}}`)
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assertProviderRequestHeaderAbsent(t, r.Header, "Accept-Encoding")
+
+		var compressed bytes.Buffer
+		gzipWriter := gzip.NewWriter(&compressed)
+		if _, err := gzipWriter.Write(responseBody); err != nil {
+			t.Fatalf("write gzip response: %v", err)
+		}
+		if err := gzipWriter.Close(); err != nil {
+			t.Fatalf("close gzip response: %v", err)
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Encoding", "gzip")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(compressed.Bytes())
+	}))
+	defer provider.Close()
+
+	client := provider.Client()
+	client.Transport = &http.Transport{DisableCompression: true}
+	meteringClient := &fakeMeteringClient{records: make(chan []*meteringv1.UsageRecord, 1)}
+	llmClient := &fakeLLMClient{resp: &llmv1.ResolveModelResponse{
+		Endpoint:       provider.URL + "/responses",
+		Token:          "provider-token",
+		RemoteName:     "remote-model",
+		OrganizationId: "org-1",
+		Protocol:       llmv1.Protocol_PROTOCOL_RESPONSES,
+		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
+	}}
+	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
+	handler := NewHandler(llmClient, authzClient, meteringClient, client)
+
+	body := `{"model":"` + modelID.String() + `","stream":false}`
+	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	req.Header.Set("Accept-Encoding", "gzip")
+	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
+	req = req.WithContext(ctx)
+	resp := httptest.NewRecorder()
+
+	handler.ServeHTTP(resp, req)
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected status %d, got %d", http.StatusOK, resp.Code)
+	}
+	if strings.TrimSpace(resp.Body.String()) != string(responseBody) {
+		t.Fatalf("unexpected response body: %s", resp.Body.String())
+	}
+	if encoding := resp.Header().Get("Content-Encoding"); encoding != "" {
+		t.Fatalf("expected content-encoding to be omitted, got %q", encoding)
+	}
+	if length := resp.Header().Get("Content-Length"); length != "" {
+		t.Fatalf("expected content-length to be omitted, got %q", length)
+	}
+
+	records := readMeteringRecords(t, meteringClient.records)
+	counts := recordKinds(records)
+	if counts[meteringKindInput] != 1 {
+		t.Fatalf("expected input usage record, got %d", counts[meteringKindInput])
+	}
+	if counts[meteringKindCached] != 1 {
+		t.Fatalf("expected cached usage record, got %d", counts[meteringKindCached])
+	}
+	if counts[meteringKindOutput] != 1 {
+		t.Fatalf("expected output usage record, got %d", counts[meteringKindOutput])
+	}
+	if counts[meteringKindRequest] != 1 {
+		t.Fatalf("expected request usage record, got %d", counts[meteringKindRequest])
+	}
+	assertMeteringRecordValue(t, records, meteringKindInput, 12*meteringMicroUnits)
+	assertMeteringRecordValue(t, records, meteringKindCached, 3*meteringMicroUnits)
+	assertMeteringRecordValue(t, records, meteringKindOutput, 4*meteringMicroUnits)
+}
+
+func readMeteringRecords(t *testing.T, records chan []*meteringv1.UsageRecord) []*meteringv1.UsageRecord {
+	t.Helper()
+	select {
+	case received := <-records:
+		return received
+	case <-time.After(time.Second):
+		t.Fatalf("timed out waiting for metering records")
+		return nil
+	}
+}
+
+func assertMeteringRecordValue(t *testing.T, records []*meteringv1.UsageRecord, kind string, value int64) {
+	t.Helper()
+	for _, record := range records {
+		if record.Labels["kind"] == kind {
+			if record.Value != value {
+				t.Fatalf("expected %s value %d, got %d", kind, value, record.Value)
+			}
+			return
+		}
+	}
+	t.Fatalf("missing %s record", kind)
 }
 
 func TestHandlerAuthorizesAgentWithIdentityPrincipal(t *testing.T) {
