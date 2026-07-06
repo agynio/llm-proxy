@@ -229,6 +229,8 @@ functions:
     export AGN_EXPOSE_INIT_IMAGE="${AGN_EXPOSE_INIT_IMAGE:-ghcr.io/agynio/agent-init-agn:latest}"
     test_tags="${E2E_TAGS:-svc_llm_proxy}"
     test_suites="${E2E_SUITES:-go-core}"
+    gateway_base_url="${AGYN_BASE_URL:-http://gateway.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080}"
+    AGYN_BASE_URL="${gateway_base_url}" \
     LLM_PROXY_URL=http://llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080 \
       E2E_SUITES="${test_suites}" \
       devspace run test-e2e $(for tag in ${test_tags}; do printf ' --tag %s' "${tag}"; done)
