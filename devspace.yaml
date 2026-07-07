@@ -91,6 +91,38 @@ functions:
       AGENT_LLM_BASE_URL=http://llm-proxy.ziti/v1
     kubectl rollout status deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} --timeout=120s
   wait_llm_proxy_http: |-
+    echo "Waiting for llm-proxy source pod to start..."
+    source_pod=""
+    for attempt in $(seq 1 180); do
+      source_pod="$(kubectl get pods -n ${LLM_PROXY_NAMESPACE} \
+        -l app.kubernetes.io/name=llm-proxy,app.kubernetes.io/instance=llm-proxy \
+        -o go-template='{{range .items}}{{if eq (index .spec.containers 0).image "ghcr.io/agynio/devcontainer-go:1"}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' \
+        | sed -n '1p')"
+      if [ -n "${source_pod}" ]; then
+        break
+      fi
+      sleep 2
+    done
+    if [ -z "${source_pod}" ]; then
+      echo "ERROR: llm-proxy source pod was not created." >&2
+      exit 1
+    fi
+
+    echo "Waiting for llm-proxy source pod ${source_pod} to listen..."
+    for attempt in $(seq 1 300); do
+      if kubectl logs -n ${LLM_PROXY_NAMESPACE} "${source_pod}" -c llm-proxy --tail=80 2>/dev/null \
+        | grep -q "llm-proxy listening on :8080"; then
+        break
+      fi
+      sleep 2
+    done
+    if ! kubectl logs -n ${LLM_PROXY_NAMESPACE} "${source_pod}" -c llm-proxy --tail=80 2>/dev/null \
+      | grep -q "llm-proxy listening on :8080"; then
+      echo "ERROR: llm-proxy source pod did not start listening." >&2
+      kubectl logs -n ${LLM_PROXY_NAMESPACE} "${source_pod}" -c llm-proxy --tail=120 || true
+      exit 1
+    fi
+
     echo "Waiting for llm-proxy HTTP service to accept connections..."
     kubectl run llm-proxy-http-wait -n ${LLM_PROXY_NAMESPACE} \
       --rm \
