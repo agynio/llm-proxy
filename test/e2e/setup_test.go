@@ -30,7 +30,7 @@ const (
 	defaultUsersAddr         = "users:50051"
 	defaultOrganizationsAddr = "organizations:50051"
 	defaultAuthorizationAddr = "authorization:50051"
-	defaultGatewayBaseURL    = "http://gateway-gateway.platform.svc.cluster.local:8080"
+	defaultGatewayBaseURL    = "http://gateway.platform.svc.cluster.local:8080"
 	setupTimeout             = 30 * time.Second
 	apiTokenName             = "e2e-llm-proxy"
 	llmProviderEndpoint      = "https://testllm.dev/v1/org/agynio/suite/agn/responses"

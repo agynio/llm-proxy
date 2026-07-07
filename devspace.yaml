@@ -26,7 +26,7 @@ functions:
     fi
   patch_deployment: |-
     echo "Patching llm-proxy deployment for DevSpace..."
-    kubectl patch deployment llm-proxy-llm-proxy -n ${LLM_PROXY_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
+    kubectl patch deployment llm-proxy -n ${LLM_PROXY_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
     spec:
       template:
         spec:
@@ -47,7 +47,22 @@ functions:
                 - |
                   set -eu
                   elapsed=0
-                  while [ ! -f /opt/app/data/go.mod ]; do
+                  while [ ! -f /opt/app/data/go.mod ] \
+                    || [ ! -f /opt/app/data/go.sum ] \
+                    || [ ! -f /opt/app/data/cmd/llm-proxy/main.go ] \
+                    || [ ! -f /opt/app/data/internal/apitokenresolver/resolver.go ] \
+                    || [ ! -f /opt/app/data/internal/auth/middleware.go ] \
+                    || [ ! -f /opt/app/data/internal/config/config.go ] \
+                    || [ ! -f /opt/app/data/internal/grpcclient/client.go ] \
+                    || [ ! -f /opt/app/data/internal/grpcclient/interceptors.go ] \
+                    || [ ! -f /opt/app/data/internal/httpauth/bearer.go ] \
+                    || [ ! -f /opt/app/data/internal/identity/identity.go ] \
+                    || [ ! -f /opt/app/data/internal/identity/metadata.go ] \
+                    || [ ! -f /opt/app/data/internal/proxy/handler.go ] \
+                    || [ ! -f /opt/app/data/internal/proxy/metering.go ] \
+                    || [ ! -f /opt/app/data/internal/ziticonn/conn.go ] \
+                    || [ ! -f /opt/app/data/internal/zitimanager/manager.go ] \
+                    || [ ! -f /opt/app/data/internal/zitimgmtclient/client.go ]; do
                     sleep 1; elapsed=$((elapsed + 1))
                     [ "$elapsed" -ge 120 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
                   done
@@ -70,6 +85,9 @@ functions:
                 limits:
                   cpu: "2"
                   memory: 4Gi
+              livenessProbe: null
+              readinessProbe: null
+              startupProbe: null
               securityContext:
                 runAsNonRoot: true
                 runAsUser: 1000
@@ -87,6 +105,58 @@ functions:
     kubectl set env deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} \
       AGENT_LLM_BASE_URL=http://llm-proxy.ziti/v1
     kubectl rollout status deployment/agents-orchestrator -n ${LLM_PROXY_NAMESPACE} --timeout=120s
+  wait_llm_proxy_http: |-
+    echo "Waiting for llm-proxy source pod to start..."
+    source_pod=""
+    for attempt in $(seq 1 180); do
+      source_pod="$(kubectl get pods -n ${LLM_PROXY_NAMESPACE} \
+        -l app.kubernetes.io/name=llm-proxy,app.kubernetes.io/instance=llm-proxy \
+        -o go-template='{{range .items}}{{if eq (index .spec.containers 0).image "ghcr.io/agynio/devcontainer-go:1"}}{{.metadata.name}}{{"\n"}}{{end}}{{end}}' \
+        | sed -n '1p')"
+      if [ -n "${source_pod}" ]; then
+        break
+      fi
+      sleep 2
+    done
+    if [ -z "${source_pod}" ]; then
+      echo "ERROR: llm-proxy source pod was not created." >&2
+      exit 1
+    fi
+
+    echo "Waiting for llm-proxy source pod ${source_pod} to listen..."
+    for attempt in $(seq 1 300); do
+      if kubectl logs -n ${LLM_PROXY_NAMESPACE} "${source_pod}" -c llm-proxy --tail=80 2>/dev/null \
+        | grep -q "llm-proxy listening on :8080"; then
+        break
+      fi
+      sleep 2
+    done
+    if ! kubectl logs -n ${LLM_PROXY_NAMESPACE} "${source_pod}" -c llm-proxy --tail=80 2>/dev/null \
+      | grep -q "llm-proxy listening on :8080"; then
+      echo "ERROR: llm-proxy source pod did not start listening." >&2
+      kubectl logs -n ${LLM_PROXY_NAMESPACE} "${source_pod}" -c llm-proxy --tail=120 || true
+      exit 1
+    fi
+
+    echo "Waiting for llm-proxy HTTP service to accept connections..."
+    kubectl run llm-proxy-http-wait -n ${LLM_PROXY_NAMESPACE} \
+      --rm \
+      --attach \
+      --restart=Never \
+      --image=busybox:1.37.0 \
+      -- sh -c "$(cat <<EOF
+    set -eu
+    for attempt in \$(seq 1 120); do
+      if nc -z -w 2 llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local 8080; then
+        echo "llm-proxy HTTP service is reachable."
+        exit 0
+      fi
+      sleep 2
+    done
+    echo "ERROR: llm-proxy HTTP service did not become reachable." >&2
+    exit 1
+    EOF
+    )"
 
   run_llm_proxy_e2e: |-
     bootstrap_dir="${GITHUB_WORKSPACE:-$(pwd)}/bootstrap"
@@ -229,7 +299,9 @@ functions:
     export AGN_EXPOSE_INIT_IMAGE="${AGN_EXPOSE_INIT_IMAGE:-ghcr.io/agynio/agent-init-agn:latest}"
     test_tags="${E2E_TAGS:-svc_llm_proxy}"
     test_suites="${E2E_SUITES:-go-core}"
-    LLM_PROXY_URL=http://llm-proxy-llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080 \
+    gateway_base_url="${AGYN_BASE_URL:-http://gateway.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080}"
+    AGYN_BASE_URL="${gateway_base_url}" \
+    LLM_PROXY_URL=http://llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080 \
       E2E_SUITES="${test_suites}" \
       devspace run test-e2e $(for tag in ${test_tags}; do printf ' --tag %s' "${tag}"; done)
 
@@ -263,6 +335,7 @@ pipelines:
       patch_deployment
       run_pipelines --background ci-e2e-source
       patch_agents_orchestrator
+      wait_llm_proxy_http
       run_llm_proxy_e2e
   ci-e2e-source:
     run: |-
