@@ -149,6 +149,7 @@ llmProxy:
   listenAddress: ":8080"
   llmServiceAddress: "llm:50051"
   usersServiceAddress: "users:50051"
+  agentsServiceAddress: "agents:50051"
   authorizationServiceAddress: "authorization:50051"
   zitiManagementAddress: "ziti-management:50051"
   zitiEnabled: false

@@ -26,6 +26,9 @@ const (
 	meteringKindCached  = "cached"
 	meteringKindOutput  = "output"
 	meteringKindRequest = "request"
+
+	meteringLabelSandboxID      = "sandbox_id"
+	meteringLabelSandboxOwnerID = "sandbox_owner_id"
 )
 
 type MeteringRecorder interface {
@@ -39,6 +42,7 @@ type meteringMetadata struct {
 	modelName string
 	threadID  string
 	identity  identity.ResolvedIdentity
+	sandbox   sandboxPrincipal
 }
 
 type usageCounts struct {
@@ -159,6 +163,14 @@ func buildUsageRecords(meta meteringMetadata, usage *usageCounts, status string)
 		"identity_id":   meta.identity.IdentityID,
 		"identity_type": string(meta.identity.IdentityType),
 		"thread_id":     meta.threadID,
+	}
+	// Usage a sandbox runs up is the organization's to pay for, but the
+	// organization alone does not say who to ask about it. The sandbox and its
+	// owner are labelled the way the Orchestrator labels the sandbox's compute,
+	// so both halves of a sandbox's cost line up under the same names.
+	if meta.sandbox.isSandbox() {
+		baseLabels[meteringLabelSandboxID] = meta.sandbox.sandboxID
+		baseLabels[meteringLabelSandboxOwnerID] = meta.sandbox.ownerID
 	}
 
 	records := make([]*meteringv1.UsageRecord, 0, 4)

@@ -16,6 +16,11 @@
 {{- $env = append $env (dict "name" "USERS_SERVICE_ADDRESS" "value" $usersAddress) -}}
 {{- end }}
 
+{{- $agentsAddress := trimAll " \n\t" (default "agents:50051" .Values.llmProxy.agentsServiceAddress) -}}
+{{- if $agentsAddress }}
+{{- $env = append $env (dict "name" "AGENTS_SERVICE_ADDRESS" "value" $agentsAddress) -}}
+{{- end }}
+
 {{- $authzAddress := trimAll " \n\t" (default "authorization:50051" .Values.llmProxy.authorizationServiceAddress) -}}
 {{- if $authzAddress }}
 {{- $env = append $env (dict "name" "AUTHORIZATION_SERVICE_ADDRESS" "value" $authzAddress) -}}
