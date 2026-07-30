@@ -453,7 +453,13 @@ func shouldStripProviderRequestHeader(key string, connectionHeaders map[string]s
 	}
 
 	switch canonical {
-	case "Host", "Content-Length", "Connection", "Transfer-Encoding", "Keep-Alive", "Te", "Trailer", "Upgrade", "Authorization", "X-Api-Key":
+	// Accept-Encoding is the caller's negotiation with us, not ours with the
+	// provider. Forwarding it makes net/http treat compression as caller-managed
+	// and stop decoding the response, so resp.Body stays gzipped: the SSE reader
+	// then parses compressed bytes, usage parsing fails on '\x1f', and the client
+	// receives a mangled stream it reports as disconnected. Dropping it lets the
+	// Transport negotiate and decode on its own.
+	case "Host", "Content-Length", "Connection", "Transfer-Encoding", "Keep-Alive", "Te", "Trailer", "Upgrade", "Authorization", "X-Api-Key", "Accept-Encoding":
 		return true
 	default:
 		return false
