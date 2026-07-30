@@ -41,6 +41,12 @@ functions:
             - name: llm-proxy
               image: ghcr.io/agynio/devcontainer-go:1 # dev container for source deploy
               workingDir: /opt/app/data
+              # The app does not listen until sources sync and compile, which is
+              # far longer than the chart's probes allow; leaving them on lets
+              # liveness kill the container mid-sync.
+              readinessProbe: null
+              livenessProbe: null
+              startupProbe: null
               command:
                 - sh
                 - -c
@@ -49,9 +55,13 @@ functions:
                   elapsed=0
                   while [ ! -f /opt/app/data/go.mod ]; do
                     sleep 1; elapsed=$((elapsed + 1))
-                    [ "$elapsed" -ge 120 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
+                    # DevSpace only starts syncing once the pod is healthy, so a
+                    # short wait here deadlocks: the container exits, the pod
+                    # crashloops, and the sync never gets a window.
+                    [ "$elapsed" -ge 900 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
                   done
                   buf generate buf.build/agynio/api \
+                    --path agynio/api/agents/v1 \
                     --path agynio/api/llm/v1 \
                     --path agynio/api/users/v1 \
                     --path agynio/api/organizations/v1 \

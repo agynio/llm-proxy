@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -93,10 +94,38 @@ func parseUsageFromPayload(body []byte) (usageCounts, error) {
 	if err := json.Unmarshal(body, &payload); err != nil {
 		return usageCounts{}, fmt.Errorf("parse usage payload: %w", err)
 	}
-	if payload.Usage == nil {
-		return usageCounts{}, fmt.Errorf("usage payload missing usage")
+	if payload.Usage != nil {
+		return usageFromInfo(payload.Usage), nil
 	}
-	return usageFromInfo(payload.Usage), nil
+
+	// The Responses API reports usage inside a "response" envelope, which is the
+	// shape parseUsageFromEvent already handles for the streamed
+	// response.completed event. The non-streaming path only ever looked at the
+	// top level, so the same body parsed one way when streamed and not at all
+	// when it was not — usage silently went unbilled.
+	var enveloped openAICompletedPayload
+	if err := json.Unmarshal(body, &enveloped); err == nil &&
+		enveloped.Response != nil && enveloped.Response.Usage != nil {
+		return usageFromInfo(enveloped.Response.Usage), nil
+	}
+
+	// Name the keys that are present, never their values: the body is model
+	// output. Without this the error says only that usage was absent, which is
+	// indistinguishable from usage sitting somewhere else in the envelope.
+	return usageCounts{}, fmt.Errorf("usage payload missing usage (top-level keys: %s)", topLevelKeys(body))
+}
+
+func topLevelKeys(body []byte) string {
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(body, &raw); err != nil {
+		return "<not an object>"
+	}
+	keys := make([]string, 0, len(raw))
+	for key := range raw {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return strings.Join(keys, ",")
 }
 
 func parseUsageFromEvent(protocol llmv1.Protocol, eventType string, data string) (usageCounts, bool, error) {
