@@ -22,13 +22,13 @@ jobs:
         uses: agynio/bootstrap/.github/actions/provision@main
 
       - name: Setup DevSpace
-        uses: agynio/e2e/.github/actions/setup-devspace@4c6ec5c5025ee6ad63ca0e8c0c3b2ba898108dc3
+        uses: agynio/e2e/.github/actions/setup-devspace@main
 
       - name: Checkout E2E repository
         uses: actions/checkout@v4
         with:
           repository: agynio/e2e
-          ref: 4c6ec5c5025ee6ad63ca0e8c0c3b2ba898108dc3
+          ref: main
           path: e2e
 
       - name: Run llm-proxy E2E
