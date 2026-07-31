@@ -12,6 +12,7 @@ const (
 	defaultListenAddress          = ":8080"
 	defaultLLMServiceAddress      = "llm:50051"
 	defaultUsersServiceAddress    = "users:50051"
+	defaultAgentsServiceAddress   = "agents:50051"
 	defaultAuthzServiceAddress    = "authorization:50051"
 	defaultMeteringServiceAddress = "metering:50051"
 	defaultZitiManagementAddress  = "ziti-management:50051"
@@ -23,6 +24,7 @@ type Config struct {
 	ListenAddress               string
 	LLMServiceAddress           string
 	UsersServiceAddress         string
+	AgentsServiceAddress        string
 	AuthorizationServiceAddress string
 	MeteringServiceAddress      string
 	ZitiManagementAddress       string
@@ -57,6 +59,7 @@ func LoadConfigFromEnv() (*Config, error) {
 		ListenAddress:               envOrDefault("LISTEN_ADDRESS", defaultListenAddress),
 		LLMServiceAddress:           envOrDefault("LLM_SERVICE_ADDRESS", defaultLLMServiceAddress),
 		UsersServiceAddress:         envOrDefault("USERS_SERVICE_ADDRESS", defaultUsersServiceAddress),
+		AgentsServiceAddress:        envOrDefault("AGENTS_SERVICE_ADDRESS", defaultAgentsServiceAddress),
 		AuthorizationServiceAddress: envOrDefault("AUTHORIZATION_SERVICE_ADDRESS", defaultAuthzServiceAddress),
 		MeteringServiceAddress:      envOrDefault("METERING_SERVICE_ADDRESS", defaultMeteringServiceAddress),
 		ZitiManagementAddress:       envOrDefault("ZITI_MANAGEMENT_ADDRESS", defaultZitiManagementAddress),

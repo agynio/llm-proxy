@@ -54,7 +54,7 @@ func (f *fakeMeteringClient) Record(_ context.Context, _ *meteringv1.RecordReque
 }
 
 func TestHandlerRejectsMissingIdentity(t *testing.T) {
-	handler := NewHandler(&fakeLLMClient{}, &fakeAuthzClient{}, &fakeMeteringClient{}, http.DefaultClient)
+	handler := NewHandler(&fakeLLMClient{}, &fakeAuthzClient{}, &fakeMeteringClient{}, &fakeSandboxResolver{}, http.DefaultClient)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"`+uuid.NewString()+`"}`))
 	resp := httptest.NewRecorder()
@@ -114,7 +114,7 @@ func TestHandlerForwardNonStream(t *testing.T) {
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
 
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
@@ -168,7 +168,7 @@ func TestHandlerAuthorizesAgentWithIdentityPrincipal(t *testing.T) {
 		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
@@ -203,7 +203,7 @@ func TestAuthorizationPrincipalIDUsesAgentIdentityEvenWhenWorkloadPresent(t *tes
 		IdentityID:   "agent-1",
 		IdentityType: identity.IdentityTypeAgent,
 		WorkloadID:   "workload-1",
-	})
+	}, sandboxPrincipal{})
 	if principalID != "agent-1" {
 		t.Fatalf("expected agent identity, got %q", principalID)
 	}
@@ -243,7 +243,7 @@ func TestHandlerForwardStream(t *testing.T) {
 		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `","stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
@@ -329,7 +329,7 @@ func TestHandlerForwardAnthropicMessages(t *testing.T) {
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
 
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", strings.NewReader(body))
@@ -403,7 +403,7 @@ func TestHandlerForwardResponsesHeaders(t *testing.T) {
 		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
@@ -483,7 +483,7 @@ func TestHandlerMessagesWithoutAnthropicVersion(t *testing.T) {
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
 
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", strings.NewReader(body))
@@ -538,7 +538,7 @@ func TestHandlerMessagesStream(t *testing.T) {
 		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_X_API_KEY,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `","stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", strings.NewReader(body))
@@ -582,7 +582,7 @@ func TestHandlerProtocolMismatchMessagesWithResponses(t *testing.T) {
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
 
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `"}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/messages", strings.NewReader(body))
@@ -619,7 +619,7 @@ func TestHandlerProtocolMismatchResponsesWithAnthropic(t *testing.T) {
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
 
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `"}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
@@ -656,7 +656,7 @@ func TestHandlerUnsupportedAuthMethod(t *testing.T) {
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
 
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `"}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
@@ -691,7 +691,7 @@ func TestHandlerForbidden(t *testing.T) {
 		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: false}}
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `"}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
@@ -707,7 +707,7 @@ func TestHandlerForbidden(t *testing.T) {
 }
 
 func TestHandlerInvalidBody(t *testing.T) {
-	handler := NewHandler(&fakeLLMClient{}, &fakeAuthzClient{}, &fakeMeteringClient{}, http.DefaultClient)
+	handler := NewHandler(&fakeLLMClient{}, &fakeAuthzClient{}, &fakeMeteringClient{}, &fakeSandboxResolver{}, http.DefaultClient)
 
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader("{"))
 	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
@@ -722,7 +722,7 @@ func TestHandlerInvalidBody(t *testing.T) {
 }
 
 func TestHandlerRouteHandling(t *testing.T) {
-	handler := NewHandler(&fakeLLMClient{}, &fakeAuthzClient{}, &fakeMeteringClient{}, http.DefaultClient)
+	handler := NewHandler(&fakeLLMClient{}, &fakeAuthzClient{}, &fakeMeteringClient{}, &fakeSandboxResolver{}, http.DefaultClient)
 
 	getReq := httptest.NewRequest(http.MethodGet, "http://example.com/v1/responses", nil)
 	getResp := httptest.NewRecorder()
@@ -758,7 +758,7 @@ func TestHandlerRouteHandling(t *testing.T) {
 func TestHandlerGRPCErrorMapping(t *testing.T) {
 	modelID := uuid.New()
 	llmClient := &fakeLLMClient{err: status.Error(codes.NotFound, "missing")}
-	handler := NewHandler(llmClient, &fakeAuthzClient{}, &fakeMeteringClient{}, http.DefaultClient)
+	handler := NewHandler(llmClient, &fakeAuthzClient{}, &fakeMeteringClient{}, &fakeSandboxResolver{}, http.DefaultClient)
 
 	body := `{"model":"` + modelID.String() + `"}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
@@ -809,7 +809,7 @@ func TestHandlerProviderErrorForwardingNonStream(t *testing.T) {
 		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
@@ -845,7 +845,7 @@ func TestHandlerProviderErrorForwardingStream(t *testing.T) {
 		AuthMethod:     llmv1.AuthMethod_AUTH_METHOD_BEARER,
 	}}
 	authzClient := &fakeAuthzClient{resp: &authorizationv1.CheckResponse{Allowed: true}}
-	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, provider.Client())
+	handler := NewHandler(llmClient, authzClient, &fakeMeteringClient{}, &fakeSandboxResolver{}, provider.Client())
 
 	body := `{"model":"` + modelID.String() + `","stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
@@ -864,7 +864,7 @@ func TestHandlerProviderErrorForwardingStream(t *testing.T) {
 }
 
 func TestHandlerBodyTooLarge(t *testing.T) {
-	handler := NewHandler(&fakeLLMClient{}, &fakeAuthzClient{}, &fakeMeteringClient{}, http.DefaultClient)
+	handler := NewHandler(&fakeLLMClient{}, &fakeAuthzClient{}, &fakeMeteringClient{}, &fakeSandboxResolver{}, http.DefaultClient)
 
 	oversize := strings.Repeat("a", int(maxRequestBodySize)+1)
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(oversize))

@@ -45,13 +45,14 @@ type AuthorizationChecker interface {
 }
 
 type Handler struct {
-	llmClient      ModelResolver
-	authzClient    AuthorizationChecker
-	meteringClient MeteringRecorder
-	client         *http.Client
+	llmClient       ModelResolver
+	authzClient     AuthorizationChecker
+	meteringClient  MeteringRecorder
+	sandboxResolver SandboxResolver
+	client          *http.Client
 }
 
-func NewHandler(llmClient ModelResolver, authzClient AuthorizationChecker, meteringClient MeteringRecorder, client *http.Client) http.Handler {
+func NewHandler(llmClient ModelResolver, authzClient AuthorizationChecker, meteringClient MeteringRecorder, sandboxResolver SandboxResolver, client *http.Client) http.Handler {
 	if llmClient == nil {
 		panic("llm client is required")
 	}
@@ -61,10 +62,13 @@ func NewHandler(llmClient ModelResolver, authzClient AuthorizationChecker, meter
 	if meteringClient == nil {
 		panic("metering client is required")
 	}
+	if sandboxResolver == nil {
+		panic("sandbox resolver is required")
+	}
 	if client == nil {
 		panic("http client is required")
 	}
-	return &Handler{llmClient: llmClient, authzClient: authzClient, meteringClient: meteringClient, client: client}
+	return &Handler{llmClient: llmClient, authzClient: authzClient, meteringClient: meteringClient, sandboxResolver: sandboxResolver, client: client}
 }
 
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -85,6 +89,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	threadID := strings.TrimSpace(r.Header.Get("x-agyn-thread-id"))
+
+	sandbox, err := h.resolveSandboxPrincipal(r.Context(), resolvedIdentity)
+	if err != nil {
+		writeProxyError(w, err)
+		return
+	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBodySize)
 	body, err := io.ReadAll(r.Body)
@@ -123,7 +133,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		providerConfig.endpoint,
 	)
 
-	if err := h.authorizeRequest(r.Context(), resolvedIdentity, providerConfig, modelID); err != nil {
+	if err := h.authorizeRequest(r.Context(), resolvedIdentity, sandbox, providerConfig, modelID); err != nil {
 		writeProxyError(w, err)
 		return
 	}
@@ -135,6 +145,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		modelName: providerConfig.remoteName,
 		threadID:  threadID,
 		identity:  resolvedIdentity,
+		sandbox:   sandbox,
 	}
 
 	updatedBody, err := updateRequestPayload(payload, providerConfig.remoteName, stream)
@@ -225,8 +236,23 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *ht
 	h.recordMetering(meta, usage, meteringStatusSuccess)
 }
 
-func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.ResolvedIdentity, provider providerConfig, modelID string) error {
-	principalID := authorizationPrincipalID(resolved)
+func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.ResolvedIdentity, sandbox sandboxPrincipal, provider providerConfig, modelID string) error {
+	// A sandbox may only spend against the organization it runs in. Its owner
+	// can well be a member of several, and the model decides which organization
+	// the call is metered to, so without this a sandbox in one organization
+	// could bill another.
+	if sandbox.isSandbox() && sandbox.organizationID != provider.organizationID {
+		log.Printf(
+			"proxy: authorization denied sandbox_id=%s sandbox_organization_id=%s model_id=%s organization_id=%s",
+			sandbox.sandboxID,
+			sandbox.organizationID,
+			modelID,
+			provider.organizationID,
+		)
+		return ErrForbidden
+	}
+
+	principalID := authorizationPrincipalID(resolved, sandbox)
 	user := fmt.Sprintf("identity:%s", principalID)
 	object := fmt.Sprintf("model:%s", modelID)
 	tuple := &authorizationv1.TupleKey{
@@ -298,7 +324,16 @@ func (h *Handler) authorizeRequest(ctx context.Context, resolved identity.Resolv
 	return nil
 }
 
-func authorizationPrincipalID(resolved identity.ResolvedIdentity) string {
+// authorizationPrincipalID names the identity the model check is made against.
+// A sandbox holds no model grant of its own — can_use follows organization
+// membership, and a sandbox is deliberately not a member — so the check resolves
+// through its record to the owner who started it. The sandbox reaches exactly
+// the models its owner can already call, and nothing else about the owner
+// carries over: model calls are the only operation it is granted.
+func authorizationPrincipalID(resolved identity.ResolvedIdentity, sandbox sandboxPrincipal) string {
+	if sandbox.isSandbox() {
+		return sandbox.ownerID
+	}
 	return resolved.IdentityID
 }
 
@@ -418,7 +453,13 @@ func shouldStripProviderRequestHeader(key string, connectionHeaders map[string]s
 	}
 
 	switch canonical {
-	case "Host", "Content-Length", "Connection", "Transfer-Encoding", "Keep-Alive", "Te", "Trailer", "Upgrade", "Authorization", "X-Api-Key":
+	// Accept-Encoding is the caller's negotiation with us, not ours with the
+	// provider. Forwarding it makes net/http treat compression as caller-managed
+	// and stop decoding the response, so resp.Body stays gzipped: the SSE reader
+	// then parses compressed bytes, usage parsing fails on '\x1f', and the client
+	// receives a mangled stream it reports as disconnected. Dropping it lets the
+	// Transport negotiate and decode on its own.
+	case "Host", "Content-Length", "Connection", "Transfer-Encoding", "Keep-Alive", "Te", "Trailer", "Upgrade", "Authorization", "X-Api-Key", "Accept-Encoding":
 		return true
 	default:
 		return false
@@ -504,7 +545,7 @@ func writeProxyError(w http.ResponseWriter, err error) {
 			statusCode = http.StatusBadRequest
 		case errors.Is(err, ErrMissingIdentity):
 			statusCode = http.StatusUnauthorized
-		case errors.Is(err, ErrForbidden):
+		case errors.Is(err, ErrForbidden), errors.Is(err, ErrSandboxUnusable):
 			statusCode = http.StatusForbidden
 		}
 	}

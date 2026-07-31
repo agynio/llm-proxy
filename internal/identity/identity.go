@@ -9,10 +9,11 @@ import (
 type IdentityType string
 
 const (
-	IdentityTypeUser   IdentityType = "user"
-	IdentityTypeAgent  IdentityType = "agent"
-	IdentityTypeApp    IdentityType = "app"
-	IdentityTypeRunner IdentityType = "runner"
+	IdentityTypeUser    IdentityType = "user"
+	IdentityTypeAgent   IdentityType = "agent"
+	IdentityTypeApp     IdentityType = "app"
+	IdentityTypeRunner  IdentityType = "runner"
+	IdentityTypeSandbox IdentityType = "sandbox"
 )
 
 type ResolvedIdentity struct {
@@ -20,6 +21,18 @@ type ResolvedIdentity struct {
 	IdentityType IdentityType
 	WorkloadID   string
 	ZitiID       string
+}
+
+// SandboxID is the sandbox record a sandbox workload identity belongs to. A
+// sandbox authenticates as its sandbox — Ziti Management registers the managed
+// identity with the sandbox id as its identity id — so the two are one value,
+// and callers that need the record read it from here rather than assuming an
+// identity id doubles as one.
+func (r ResolvedIdentity) SandboxID() string {
+	if r.IdentityType != IdentityTypeSandbox {
+		return ""
+	}
+	return strings.TrimSpace(r.IdentityID)
 }
 
 func ParseIdentityType(value string) (IdentityType, error) {
@@ -33,6 +46,8 @@ func ParseIdentityType(value string) (IdentityType, error) {
 		return IdentityTypeApp, nil
 	case string(IdentityTypeRunner):
 		return IdentityTypeRunner, nil
+	case string(IdentityTypeSandbox):
+		return IdentityTypeSandbox, nil
 	default:
 		return "", fmt.Errorf("unsupported identity type: %q", value)
 	}

@@ -26,7 +26,17 @@ functions:
     fi
   patch_deployment: |-
     echo "Patching llm-proxy deployment for DevSpace..."
-    kubectl patch deployment llm-proxy-llm-proxy -n ${LLM_PROXY_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
+    # Resolve by label: the umbrella names the deployment llm-proxy and the
+    # bootstrap stack has used llm-proxy-llm-proxy, so a hardcoded name works
+    # in one and aborts the whole pipeline in the other.
+    LLM_PROXY_DEPLOYMENT="$(kubectl get deployment -n ${LLM_PROXY_NAMESPACE} \
+      -l app.kubernetes.io/name=llm-proxy -o jsonpath='{.items[0].metadata.name}')"
+    if [ -z "${LLM_PROXY_DEPLOYMENT}" ]; then
+      echo "ERROR: no deployment with app.kubernetes.io/name=llm-proxy in ${LLM_PROXY_NAMESPACE}" >&2
+      exit 1
+    fi
+    echo "  target deployment: ${LLM_PROXY_DEPLOYMENT}"
+    kubectl patch deployment "${LLM_PROXY_DEPLOYMENT}" -n ${LLM_PROXY_NAMESPACE} --type strategic --patch "$(cat <<'EOF'
     spec:
       template:
         spec:
@@ -41,6 +51,17 @@ functions:
             - name: llm-proxy
               image: ghcr.io/agynio/devcontainer-go:1 # dev container for source deploy
               workingDir: /opt/app/data
+              # Liveness would kill the container while it waits for the source
+              # sync and compiles, so it goes. Readiness stays: it is what holds
+              # callers off until the app is actually listening, and dropping it
+              # makes the pod report Ready before it can serve.
+              livenessProbe: null
+              readinessProbe:
+                tcpSocket:
+                  port: 8080
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                failureThreshold: 180
               command:
                 - sh
                 - -c
@@ -49,9 +70,13 @@ functions:
                   elapsed=0
                   while [ ! -f /opt/app/data/go.mod ]; do
                     sleep 1; elapsed=$((elapsed + 1))
-                    [ "$elapsed" -ge 120 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
+                    # DevSpace only starts syncing once the pod is healthy, so a
+                    # short wait here deadlocks: the container exits, the pod
+                    # crashloops, and the sync never gets a window.
+                    [ "$elapsed" -ge 900 ] && { echo "ERROR: sync timeout" >&2; exit 1; }
                   done
                   buf generate buf.build/agynio/api \
+                    --path agynio/api/agents/v1 \
                     --path agynio/api/llm/v1 \
                     --path agynio/api/users/v1 \
                     --path agynio/api/organizations/v1 \
@@ -229,7 +254,7 @@ functions:
     export AGN_EXPOSE_INIT_IMAGE="${AGN_EXPOSE_INIT_IMAGE:-ghcr.io/agynio/agent-init-agn:latest}"
     test_tags="${E2E_TAGS:-svc_llm_proxy}"
     test_suites="${E2E_SUITES:-go-core}"
-    LLM_PROXY_URL=http://llm-proxy-llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080 \
+    LLM_PROXY_URL=http://llm-proxy.${LLM_PROXY_NAMESPACE}.svc.cluster.local:8080 \
       E2E_SUITES="${test_suites}" \
       devspace run test-e2e $(for tag in ${test_tags}; do printf ' --tag %s' "${tag}"; done)
 
@@ -281,8 +306,10 @@ dev:
   llm-proxy:
     namespace: ${LLM_PROXY_NAMESPACE}
     labelSelector:
+      # Name only: the release name differs between the umbrella (agyn-platform)
+      # and the bootstrap stack, so pinning the instance label matches in one
+      # environment and finds nothing in the other.
       app.kubernetes.io/name: llm-proxy
-      app.kubernetes.io/instance: llm-proxy
     containers:
       llm-proxy:
         container: llm-proxy
