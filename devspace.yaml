@@ -51,12 +51,17 @@ functions:
             - name: llm-proxy
               image: ghcr.io/agynio/devcontainer-go:1 # dev container for source deploy
               workingDir: /opt/app/data
-              # The app does not listen until sources sync and compile, which is
-              # far longer than the chart's probes allow; leaving them on lets
-              # liveness kill the container mid-sync.
-              readinessProbe: null
+              # Liveness would kill the container while it waits for the source
+              # sync and compiles, so it goes. Readiness stays: it is what holds
+              # callers off until the app is actually listening, and dropping it
+              # makes the pod report Ready before it can serve.
               livenessProbe: null
-              startupProbe: null
+              readinessProbe:
+                tcpSocket:
+                  port: 8080
+                initialDelaySeconds: 5
+                periodSeconds: 5
+                failureThreshold: 180
               command:
                 - sh
                 - -c
