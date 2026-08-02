@@ -4,26 +4,6 @@ vars:
   LLM_PROXY_NAMESPACE: platform
 
 functions:
-  disable_argocd_sync: |-
-    if kubectl get application llm-proxy -n argocd >/dev/null 2>&1; then
-      echo "Disabling ArgoCD auto-sync for llm-proxy..."
-      kubectl patch application llm-proxy -n argocd \
-        --type merge \
-        -p '{"spec":{"syncPolicy":{"automated":null}}}'
-      echo "ArgoCD auto-sync disabled."
-    else
-      echo "WARNING: ArgoCD Application 'llm-proxy' not found in argocd namespace."
-    fi
-  restore_argocd_sync: &restore_argocd_sync |-
-    if kubectl get application llm-proxy -n argocd >/dev/null 2>&1; then
-      echo "Re-enabling ArgoCD auto-sync for llm-proxy..."
-      kubectl patch application llm-proxy -n argocd \
-        --type merge \
-        -p '{"spec":{"syncPolicy":{"automated":{"prune":true,"selfHeal":true}}}}'
-      echo "ArgoCD auto-sync restored."
-    else
-      echo "WARNING: ArgoCD Application 'llm-proxy' not found in argocd namespace."
-    fi
   patch_deployment: |-
     echo "Patching llm-proxy deployment for DevSpace..."
     # Resolve by label: the umbrella names the deployment llm-proxy and the
@@ -271,7 +251,6 @@ pipelines:
         short: w
         description: "Keep DevSpace running and stream logs"
     run: |-
-      disable_argocd_sync
       patch_deployment
       if [ "$(get_flag "watch")" == "true" ]; then
         start_dev --disable-pod-replace llm-proxy
@@ -284,7 +263,6 @@ pipelines:
       run_llm_proxy_e2e
   ci-e2e:
     run: |-
-      disable_argocd_sync
       patch_deployment
       run_pipelines --background ci-e2e-source
       patch_agents_orchestrator
@@ -294,13 +272,6 @@ pipelines:
       start_dev --disable-pod-replace llm-proxy
 
 hooks:
-  - name: restore-argocd-auto-sync
-    events:
-      - after:dev:llm-proxy
-    command: bash
-    args:
-      - -c
-      - *restore_argocd_sync
 
 dev:
   llm-proxy:
