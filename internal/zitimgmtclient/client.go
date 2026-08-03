@@ -108,6 +108,8 @@ func parseIdentityType(identityType identityv1.IdentityType) (identity.IdentityT
 	switch identityType {
 	case identityv1.IdentityType_IDENTITY_TYPE_AGENT:
 		return identity.IdentityTypeAgent, nil
+	case identityv1.IdentityType_IDENTITY_TYPE_AGENT_INSTANCE:
+		return identity.IdentityTypeAgentInstance, nil
 	case identityv1.IdentityType_IDENTITY_TYPE_RUNNER:
 		return identity.IdentityTypeRunner, nil
 	case identityv1.IdentityType_IDENTITY_TYPE_APP:
