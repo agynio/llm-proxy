@@ -80,6 +80,12 @@ func TestHandlerForwardNonStream(t *testing.T) {
 		if r.Header.Get("Content-Type") != "application/json" {
 			t.Fatalf("unexpected content type %q", r.Header.Get("Content-Type"))
 		}
+		if got := r.Header.Values("X-Custom-Feature"); strings.Join(got, ",") != "alpha,beta" {
+			t.Fatalf("unexpected custom feature headers %q", got)
+		}
+		if r.Header.Get("X-Trace-Id") != "trace-1" {
+			t.Fatalf("unexpected trace id header %q", r.Header.Get("X-Trace-Id"))
+		}
 		if got := r.Header.Get("Accept"); got != "" {
 			t.Fatalf("unexpected accept header %q", got)
 		}
@@ -118,6 +124,10 @@ func TestHandlerForwardNonStream(t *testing.T) {
 
 	body := `{"model":"` + modelID.String() + `","stream":false}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	req.Header.Add("x-custom-feature", "alpha")
+	req.Header.Add("x-custom-feature", "beta")
+	req.Header.Set("x-trace-id", "trace-1")
+	req.Header.Set("Content-Type", "text/plain")
 	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
 	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
@@ -247,6 +257,7 @@ func TestHandlerForwardStream(t *testing.T) {
 
 	body := `{"model":"` + modelID.String() + `","stream":true}`
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
+	req.Header.Set("Accept", "application/json")
 	ctx := identity.WithIdentity(req.Context(), identity.ResolvedIdentity{IdentityID: "user-1", IdentityType: identity.IdentityTypeUser})
 	req = req.WithContext(ctx)
 	resp := httptest.NewRecorder()
@@ -285,6 +296,12 @@ func TestHandlerForwardAnthropicMessages(t *testing.T) {
 		}
 		if r.Header.Get("Anthropic-Beta") != "prompt-caching-2024-07-31" {
 			t.Fatalf("unexpected anthropic-beta header %q", r.Header.Get("Anthropic-Beta"))
+		}
+		if got := r.Header.Values("X-Custom-Feature"); strings.Join(got, ",") != "alpha,beta" {
+			t.Fatalf("unexpected custom feature headers %q", got)
+		}
+		if r.Header.Get("X-Trace-Id") != "trace-1" {
+			t.Fatalf("unexpected trace id header %q", r.Header.Get("X-Trace-Id"))
 		}
 		assertProviderRequestHeaderAbsent(t, r.Header, "X-Agyn-Thread-Id")
 		assertProviderRequestHeaderAbsent(t, r.Header, "Connection")
@@ -336,6 +353,10 @@ func TestHandlerForwardAnthropicMessages(t *testing.T) {
 	req.Host = "caller.example"
 	req.Header.Set("anthropic-version", "2023-06-01")
 	req.Header.Set("anthropic-beta", "prompt-caching-2024-07-31")
+	req.Header.Add("x-custom-feature", "alpha")
+	req.Header.Add("x-custom-feature", "beta")
+	req.Header.Set("x-trace-id", "trace-1")
+	req.Header.Set("Content-Type", "text/plain")
 	req.Header.Set("Authorization", "Bearer caller-token")
 	req.Header.Set("x-api-key", "caller-key")
 	req.Header.Set("x-agyn-thread-id", "thread-1")
@@ -377,6 +398,12 @@ func TestHandlerForwardResponsesHeaders(t *testing.T) {
 		if r.Header.Get("Openai-Beta") != "responses=v1" {
 			t.Fatalf("unexpected openai-beta header %q", r.Header.Get("Openai-Beta"))
 		}
+		if r.Header.Get("X-Request-Feature") != "enabled" {
+			t.Fatalf("unexpected request feature header %q", r.Header.Get("X-Request-Feature"))
+		}
+		if r.Header.Get("Content-Type") != "application/json" {
+			t.Fatalf("unexpected content type %q", r.Header.Get("Content-Type"))
+		}
 		assertProviderRequestHeaderAbsent(t, r.Header, "X-Api-Key")
 		assertProviderRequestHeaderAbsent(t, r.Header, "X-Agyn-Thread-Id")
 		assertProviderRequestHeaderAbsent(t, r.Header, "Connection")
@@ -409,6 +436,8 @@ func TestHandlerForwardResponsesHeaders(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "http://example.com/v1/responses", strings.NewReader(body))
 	req.Host = "caller.example"
 	req.Header.Set("openai-beta", "responses=v1")
+	req.Header.Set("x-request-feature", "enabled")
+	req.Header.Set("Content-Type", "text/plain")
 	req.Header.Set("Authorization", "Bearer caller-token")
 	req.Header.Set("x-api-key", "caller-key")
 	req.Header.Set("x-agyn-thread-id", "thread-1")
