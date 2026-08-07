@@ -26,6 +26,20 @@
 {{- $env = append $env (dict "name" "AUTHORIZATION_SERVICE_ADDRESS" "value" $authzAddress) -}}
 {{- end }}
 
+{{- $notificationsAddress := trimAll " \n\t" (default "notifications:50051" .Values.llmProxy.notificationsServiceAddress) -}}
+{{- if $notificationsAddress }}
+{{- $env = append $env (dict "name" "NOTIFICATIONS_SERVICE_ADDRESS" "value" $notificationsAddress) -}}
+{{- end }}
+
+{{- $egressCACert := trimAll " \n\t" (default "/var/run/agyn/egress-ca/tls.crt" .Values.llmProxy.egressCACertPath) -}}
+{{- if $egressCACert }}
+{{- $env = append $env (dict "name" "EGRESS_CA_CERT_PATH" "value" $egressCACert) -}}
+{{- end }}
+{{- $egressCAKey := trimAll " \n\t" (default "/var/run/agyn/egress-ca/tls.key" .Values.llmProxy.egressCAKeyPath) -}}
+{{- if $egressCAKey }}
+{{- $env = append $env (dict "name" "EGRESS_CA_KEY_PATH" "value" $egressCAKey) -}}
+{{- end }}
+
 {{- $zitiMgmtAddress := trimAll " \n\t" (default "ziti-management:50051" .Values.llmProxy.zitiManagementAddress) -}}
 {{- if $zitiMgmtAddress }}
 {{- $env = append $env (dict "name" "ZITI_MANAGEMENT_ADDRESS" "value" $zitiMgmtAddress) -}}
