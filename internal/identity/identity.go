@@ -27,6 +27,13 @@ type ResolvedIdentity struct {
 	IdentityType IdentityType
 	WorkloadID   string
 	ZitiID       string
+	// AgentID and EnvironmentID are recorded on the workload's OpenZiti
+	// identity at creation, so native mode resolves a subscription from the
+	// connection rather than calling Agents on the request path or trusting a
+	// value the workload asserts about itself. AgentID is empty for a sandbox,
+	// which runs an environment with no agent behind it.
+	AgentID       string
+	EnvironmentID string
 }
 
 // SandboxID is the sandbox record a sandbox workload identity belongs to. A
