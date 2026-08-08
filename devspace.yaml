@@ -31,17 +31,16 @@ functions:
             - name: llm-proxy
               image: ghcr.io/agynio/devcontainer-go:1 # dev container for source deploy
               workingDir: /opt/app/data
-              # Liveness would kill the container while it waits for the source
-              # sync and compiles, so it goes. Readiness stays: it is what holds
-              # callers off until the app is actually listening, and dropping it
-              # makes the pod report Ready before it can serve.
+              # Both go, for the same reason: the container has no source until
+              # DevSpace syncs it, and DevSpace syncs only after the pod reports
+              # Ready. A readiness probe on the app port makes that circular --
+              # the port cannot open until the sync that is waiting on it lands.
+              # Liveness would additionally kill the container mid-compile. The
+              # pipeline's own health check is what confirms the service is
+              # serving before the session exits.
               livenessProbe: null
-              readinessProbe:
-                tcpSocket:
-                  port: 8080
-                initialDelaySeconds: 5
-                periodSeconds: 5
-                failureThreshold: 180
+              readinessProbe: null
+              startupProbe: null
               command:
                 - sh
                 - -c
@@ -63,7 +62,8 @@ functions:
                     --path agynio/api/authorization/v1 \
                     --path agynio/api/metering/v1 \
                     --path agynio/api/ziti_management/v1 \
-                    --path agynio/api/identity/v1
+                    --path agynio/api/identity/v1 \
+                    --path agynio/api/notifications/v1
                   exec go run ./cmd/llm-proxy
               volumeMounts:
                 - name: data
