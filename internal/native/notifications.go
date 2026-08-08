@@ -29,6 +29,10 @@ const (
 	identityMetadataKey         = "x-identity-id"
 	subscriberIdentityID        = "00000000-0000-0000-0000-000000000000"
 	defaultNotificationsBackoff = time.Second
+	// A stream that fails for a reason retrying cannot fix -- an unregistered
+	// room, a revoked identity -- would otherwise log once a second forever,
+	// which buries every other line in the proxy's output.
+	maxNotificationsBackoff = time.Minute
 )
 
 type NotificationsClient interface {
@@ -67,14 +71,20 @@ func NewInvalidationSubscriber(client NotificationsClient, target Invalidator) *
 }
 
 func (s *InvalidationSubscriber) Run(ctx context.Context) error {
+	backoff := s.backoff
 	for ctx.Err() == nil {
 		if err := s.runStream(ctx); err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
 			}
-			log.Printf("native: invalidation stream failed: %v", err)
+			log.Printf("native: invalidation stream failed, retrying in %s: %v", backoff, err)
+			backoff = min(backoff*2, maxNotificationsBackoff)
+		} else {
+			// A clean end is the server closing the stream, not a fault; the
+			// next attempt should be prompt rather than inherit a long wait.
+			backoff = s.backoff
 		}
-		if !sleepContext(ctx, s.backoff) {
+		if !sleepContext(ctx, backoff) {
 			return ctx.Err()
 		}
 	}
