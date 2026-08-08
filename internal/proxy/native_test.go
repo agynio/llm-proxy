@@ -44,7 +44,7 @@ func nativeBinding(upstream string) native.Binding {
 		UpstreamEndpoint: upstream,
 		Protocol:         llmv1.Protocol_PROTOCOL_ANTHROPIC_MESSAGES,
 		OrganizationID:   "11111111-1111-1111-1111-111111111111",
-		Vendor:           llmv1.Vendor_VENDOR_CLAUDE,
+		Vendor:           llmv1.Vendor_VENDOR_ANTHROPIC,
 		Identity:         identity.ResolvedIdentity{IdentityID: "id-1", IdentityType: identity.IdentityTypeSandbox},
 	}
 }
@@ -204,7 +204,7 @@ func TestNativeForwarderMetersAgainstTheSubscription(t *testing.T) {
 	if labels["resource_id"] != "sub-1" {
 		t.Fatalf("expected the subscription id, got %q", labels["resource_id"])
 	}
-	if labels["vendor"] != "claude" {
+	if labels["vendor"] != "anthropic" {
 		t.Fatalf("expected vendor=claude, got %q", labels["vendor"])
 	}
 	if labels["model_name"] != "claude-sonnet-5" {

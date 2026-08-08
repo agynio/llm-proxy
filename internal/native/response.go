@@ -99,7 +99,7 @@ func vendorErrorBody(vendor llmv1.Vendor, message string) []byte {
 	prefixed := "agyn: " + message
 	var payload any
 	switch vendor {
-	case llmv1.Vendor_VENDOR_CLAUDE:
+	case llmv1.Vendor_VENDOR_ANTHROPIC:
 		payload = map[string]any{
 			"type":  "error",
 			"error": map[string]any{"type": "permission_error", "message": prefixed},

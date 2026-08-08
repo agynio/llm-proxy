@@ -177,10 +177,10 @@ func modelAllowed(modelName string, allowed []string) bool {
 
 func nativeVendorLabel(vendor llmv1.Vendor) string {
 	switch vendor {
-	case llmv1.Vendor_VENDOR_CLAUDE:
-		return "claude"
-	case llmv1.Vendor_VENDOR_CODEX:
-		return "codex"
+	case llmv1.Vendor_VENDOR_ANTHROPIC:
+		return "anthropic"
+	case llmv1.Vendor_VENDOR_OPENAI:
+		return "openai"
 	default:
 		return ""
 	}
@@ -193,7 +193,7 @@ func writeNativeError(w http.ResponseWriter, vendor llmv1.Vendor, status int, me
 		"type":  "error",
 		"error": map[string]any{"type": "permission_error", "message": "agyn: " + message},
 	}
-	if vendor != llmv1.Vendor_VENDOR_CLAUDE {
+	if vendor != llmv1.Vendor_VENDOR_ANTHROPIC {
 		delete(body, "type")
 	}
 	encoded, err := json.Marshal(body)

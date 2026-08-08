@@ -27,8 +27,8 @@ var vendorServices = map[string]struct {
 	vendor llmv1.Vendor
 	host   string
 }{
-	"llm-intercept-claude": {llmv1.Vendor_VENDOR_CLAUDE, "api.anthropic.com"},
-	"llm-intercept-codex":  {llmv1.Vendor_VENDOR_CODEX, "chatgpt.com"},
+	"llm-intercept-anthropic": {llmv1.Vendor_VENDOR_ANTHROPIC, "api.anthropic.com"},
+	"llm-intercept-openai":    {llmv1.Vendor_VENDOR_OPENAI, "chatgpt.com"},
 }
 
 // VendorForService reports which vendor a bound service carries.
