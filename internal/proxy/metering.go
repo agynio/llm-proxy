@@ -31,6 +31,13 @@ const (
 	meteringLabelSandboxID      = "sandbox_id"
 	meteringLabelSandboxOwnerID = "sandbox_owner_id"
 
+	// The levels usage is ranked by. identity_id names whichever one
+	// authenticated, which is the instance here and the class in the
+	// Orchestrator's records; these name themselves.
+	meteringLabelAgentID         = "agent_id"
+	meteringLabelAgentInstanceID = "agent_instance_id"
+	meteringLabelEnvironmentID   = "environment_id"
+
 	// resource is a resource *type*, which is what keeps native-mode tokens out
 	// of spend aggregation: a subscription is a flat fee, and summing its
 	// tokens alongside API tokens produces a bill that does not exist.
@@ -221,14 +228,21 @@ func buildUsageRecords(meta meteringMetadata, usage *usageCounts, status string)
 		baseLabels["vendor"] = meta.vendor
 		baseLabels["model_name"] = meta.modelName
 	}
-	// Usage a sandbox runs up is the organization's to pay for, but the
-	// organization alone does not say who to ask about it. The sandbox and its
-	// owner are labelled the way the Orchestrator labels the sandbox's compute,
-	// so both halves of a sandbox's cost line up under the same names.
-	if meta.sandbox.isSandbox() {
-		baseLabels[meteringLabelSandboxID] = meta.sandbox.sandboxID
-		baseLabels[meteringLabelSandboxOwnerID] = meta.sandbox.ownerID
+	// Which agent, which instance of it, and which environment. The OpenZiti
+	// identity carries all three, so a call stays attributable without joining
+	// a workload record that may already be gone.
+	setLabelIfPresent(baseLabels, meteringLabelAgentID, meta.identity.AgentID)
+	setLabelIfPresent(baseLabels, meteringLabelEnvironmentID, meta.identity.EnvironmentID)
+	if meta.identity.IdentityType == identity.IdentityTypeAgentInstance {
+		setLabelIfPresent(baseLabels, meteringLabelAgentInstanceID, meta.identity.IdentityID)
 	}
+
+	// Usage a sandbox runs up is the organization's to pay for, but the
+	// organization alone does not say who to ask about it. The sandbox is read
+	// off the identity -- a sandbox authenticates as itself -- so native mode
+	// labels it too, having no record to resolve; only the owner needs one.
+	setLabelIfPresent(baseLabels, meteringLabelSandboxID, meta.identity.SandboxID())
+	setLabelIfPresent(baseLabels, meteringLabelSandboxOwnerID, meta.sandbox.ownerID)
 
 	records := make([]*meteringv1.UsageRecord, 0, 4)
 
@@ -258,6 +272,15 @@ func newUsageRecord(meta meteringMetadata, timestamp *timestamppb.Timestamp, uni
 		Labels:         labels,
 		Unit:           unit,
 		Value:          value,
+	}
+}
+
+// setLabelIfPresent keeps absent levels out of the map entirely. Metering drops
+// empty values anyway; not writing them keeps the labels a record carries the
+// same list a reader can expect to group by.
+func setLabelIfPresent(labels map[string]string, key, value string) {
+	if trimmed := strings.TrimSpace(value); trimmed != "" {
+		labels[key] = trimmed
 	}
 }
 
