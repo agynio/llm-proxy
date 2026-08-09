@@ -285,3 +285,32 @@ func readAllBody(r *http.Request) ([]byte, error) {
 		}
 	}
 }
+
+// The caller's whole path is appended to the upstream, so an upstream that
+// carries a path of its own forwards it twice -- which reaches the vendor as a
+// 404 and looks like the endpoint does not exist.
+func TestNativeForwardPreservesTheCallersPathExactly(t *testing.T) {
+	var gotPath string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RequestURI()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"model":"gpt-5.5","usage":{}}`))
+	}))
+	defer upstream.Close()
+
+	binding := nativeBinding(upstream.URL)
+	binding.Vendor = llmv1.Vendor_VENDOR_OPENAI
+	binding.Protocol = llmv1.Protocol_PROTOCOL_RESPONSES
+
+	forwarder := NewNativeForwarder(upstream.Client(), newCapturingMeteringClient())
+
+	recorder := httptest.NewRecorder()
+	forwarder.Forward(recorder, nativeRequest(t, "/backend-api/codex/responses", `{"model":"gpt-5.5"}`), binding)
+
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", recorder.Code, recorder.Body.String())
+	}
+	if gotPath != "/backend-api/codex/responses" {
+		t.Fatalf("upstream path = %q, want the caller's own", gotPath)
+	}
+}
