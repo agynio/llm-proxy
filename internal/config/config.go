@@ -16,8 +16,15 @@ const (
 	defaultAuthzServiceAddress    = "authorization:50051"
 	defaultMeteringServiceAddress = "metering:50051"
 	defaultZitiManagementAddress  = "ziti-management:50051"
-	defaultZitiLeaseInterval      = 2 * time.Minute
-	defaultZitiEnrollmentTimeout  = 5 * time.Minute
+	defaultNotificationsAddress   = "notifications:50051"
+	// The Egress CA, mounted from the cert-manager secret. The same CA the
+	// Egress Gateway uses and the orchestrator already distributes to
+	// workloads -- a second CA would mean a second trust bundle in every image
+	// for no gain.
+	defaultEgressCACertPath      = "/var/run/agyn/egress-ca/tls.crt"
+	defaultEgressCAKeyPath       = "/var/run/agyn/egress-ca/tls.key"
+	defaultZitiLeaseInterval     = 2 * time.Minute
+	defaultZitiEnrollmentTimeout = 5 * time.Minute
 )
 
 type Config struct {
@@ -28,6 +35,9 @@ type Config struct {
 	AuthorizationServiceAddress string
 	MeteringServiceAddress      string
 	ZitiManagementAddress       string
+	NotificationsAddress        string
+	EgressCACertPath            string
+	EgressCAKeyPath             string
 	ZitiEnabled                 bool
 	ZitiLeaseRenewalInterval    time.Duration
 	ZitiEnrollmentTimeout       time.Duration
@@ -63,6 +73,9 @@ func LoadConfigFromEnv() (*Config, error) {
 		AuthorizationServiceAddress: envOrDefault("AUTHORIZATION_SERVICE_ADDRESS", defaultAuthzServiceAddress),
 		MeteringServiceAddress:      envOrDefault("METERING_SERVICE_ADDRESS", defaultMeteringServiceAddress),
 		ZitiManagementAddress:       envOrDefault("ZITI_MANAGEMENT_ADDRESS", defaultZitiManagementAddress),
+		NotificationsAddress:        envOrDefault("NOTIFICATIONS_SERVICE_ADDRESS", defaultNotificationsAddress),
+		EgressCACertPath:            envOrDefault("EGRESS_CA_CERT_PATH", defaultEgressCACertPath),
+		EgressCAKeyPath:             envOrDefault("EGRESS_CA_KEY_PATH", defaultEgressCAKeyPath),
 		ZitiEnabled:                 zitiEnabled,
 		ZitiLeaseRenewalInterval:    zitiLeaseRenewalInterval,
 		ZitiEnrollmentTimeout:       zitiEnrollmentTimeout,

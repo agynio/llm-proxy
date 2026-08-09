@@ -97,10 +97,12 @@ func (c *Client) ResolveIdentity(ctx context.Context, sourceIdentity string) (id
 	}
 
 	return identity.ResolvedIdentity{
-		IdentityID:   identityID,
-		IdentityType: identityType,
-		WorkloadID:   strings.TrimSpace(response.GetWorkloadId()),
-		ZitiID:       trimmed,
+		IdentityID:    identityID,
+		IdentityType:  identityType,
+		WorkloadID:    strings.TrimSpace(response.GetWorkloadId()),
+		ZitiID:        trimmed,
+		AgentID:       strings.TrimSpace(response.GetAgentId()),
+		EnvironmentID: strings.TrimSpace(response.GetEnvironmentId()),
 	}, nil
 }
 

@@ -30,6 +30,12 @@ const (
 
 	meteringLabelSandboxID      = "sandbox_id"
 	meteringLabelSandboxOwnerID = "sandbox_owner_id"
+
+	// resource is a resource *type*, which is what keeps native-mode tokens out
+	// of spend aggregation: a subscription is a flat fee, and summing its
+	// tokens alongside API tokens produces a bill that does not exist.
+	meteringResourceModel        = "model"
+	meteringResourceSubscription = "subscription"
 )
 
 type MeteringRecorder interface {
@@ -44,6 +50,10 @@ type meteringMetadata struct {
 	threadID  string
 	identity  identity.ResolvedIdentity
 	sandbox   sandboxPrincipal
+	// native records against a Subscription rather than a Model: there is no
+	// Model resource behind the call, and its tokens are not spend.
+	native bool
+	vendor string
 }
 
 type usageCounts struct {
@@ -169,12 +179,19 @@ func (h *Handler) recordMetering(meta meteringMetadata, usage *usageCounts, stat
 	if len(records) == 0 {
 		return
 	}
+	recordAsync(h.meteringClient, records)
+}
 
+func (f *NativeForwarder) recordAsync(records []*meteringv1.UsageRecord) {
+	recordAsync(f.metering, records)
+}
+
+func recordAsync(client MeteringRecorder, records []*meteringv1.UsageRecord) {
 	go func(records []*meteringv1.UsageRecord) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 
-		if _, err := h.meteringClient.Record(ctx, &meteringv1.RecordRequest{Records: records}); err != nil {
+		if _, err := client.Record(ctx, &meteringv1.RecordRequest{Records: records}); err != nil {
 			log.Printf("proxy: metering record failed: %v", err)
 		}
 	}(records)
@@ -186,12 +203,23 @@ func buildUsageRecords(meta meteringMetadata, usage *usageCounts, status string)
 	}
 
 	timestamp := timestamppb.New(time.Now().UTC())
+	resource := meteringResourceModel
+	if meta.native {
+		resource = meteringResourceSubscription
+	}
 	baseLabels := map[string]string{
 		"resource_id":   meta.modelID,
-		"resource":      meta.modelName,
+		"resource":      resource,
 		"identity_id":   meta.identity.IdentityID,
 		"identity_type": string(meta.identity.IdentityType),
 		"thread_id":     meta.threadID,
+	}
+	// vendor and model_name carry what the Model UUID carried in the other
+	// mode -- which model actually ran -- so usage views stay answerable
+	// without a resource to join against.
+	if meta.native {
+		baseLabels["vendor"] = meta.vendor
+		baseLabels["model_name"] = meta.modelName
 	}
 	// Usage a sandbox runs up is the organization's to pay for, but the
 	// organization alone does not say who to ask about it. The sandbox and its

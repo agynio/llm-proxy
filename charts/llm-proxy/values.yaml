@@ -76,8 +76,19 @@ extraEnvVarsCM: ""
 extraEnvVarsSecret: ""
 
 configMounts: []
-extraVolumeMounts: []
-extraVolumes: []
+# The Egress CA keypair, for minting the leaf certificates native mode presents
+# for the vendor hostnames. The same CA the Egress Gateway uses and the
+# orchestrator already distributes to workloads. Absent, the platform path still
+# serves and native mode is disabled.
+extraVolumeMounts:
+  - name: egress-ca
+    mountPath: /var/run/agyn/egress-ca
+    readOnly: true
+extraVolumes:
+  - name: egress-ca
+    secret:
+      secretName: egress-ca
+      optional: true
 
 initContainers: []
 extraContainers: []
@@ -152,6 +163,7 @@ llmProxy:
   agentsServiceAddress: "agents:50051"
   authorizationServiceAddress: "authorization:50051"
   zitiManagementAddress: "ziti-management:50051"
+  notificationsServiceAddress: "notifications:50051"
   zitiEnabled: false
   zitiLeaseRenewalInterval: "2m"
   zitiEnrollmentTimeout: "5m"

@@ -30,6 +30,7 @@ RUN buf generate buf.build/agynio/api \
       --path agynio/api/metering/v1 \
       --path agynio/api/ziti_management/v1 \
       --path agynio/api/identity/v1 \
+    --path agynio/api/notifications/v1 \
       --path agynio/api/agents/v1
 
 COPY . .

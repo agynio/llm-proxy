@@ -17,12 +17,14 @@ import (
 	authorizationv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/authorization/v1"
 	llmv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/llm/v1"
 	meteringv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/metering/v1"
+	notificationsv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/notifications/v1"
 	usersv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/users/v1"
 	zitimgmtv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/ziti_management/v1"
 	"github.com/agynio/llm-proxy/internal/apitokenresolver"
 	"github.com/agynio/llm-proxy/internal/auth"
 	"github.com/agynio/llm-proxy/internal/config"
 	"github.com/agynio/llm-proxy/internal/grpcclient"
+	"github.com/agynio/llm-proxy/internal/native"
 	"github.com/agynio/llm-proxy/internal/proxy"
 	"github.com/agynio/llm-proxy/internal/ziticonn"
 	"github.com/agynio/llm-proxy/internal/zitimanager"
@@ -31,7 +33,13 @@ import (
 	"google.golang.org/grpc"
 )
 
-const shutdownTimeout = 10 * time.Second
+const (
+	shutdownTimeout = 10 * time.Second
+	// Short-lived leaves, cached per hostname. The vendor set is closed, so the
+	// cache never holds more than a handful.
+	leafCertificateTTL       = time.Hour
+	leafCertificateCacheSize = 64
+)
 
 func main() {
 	if err := run(); err != nil {
@@ -60,6 +68,7 @@ func run() error {
 	usersClient := mustClient(cfg.UsersServiceAddress, "users", usersv1.NewUsersServiceClient, &cleanup)
 	meteringClient := mustClient(cfg.MeteringServiceAddress, "metering", meteringv1.NewMeteringServiceClient, &cleanup)
 	agentsClient := mustClient(cfg.AgentsServiceAddress, "agents", agentsv1.NewAgentsServiceClient, &cleanup)
+	notificationsClient := mustClient(cfg.NotificationsAddress, "notifications", notificationsv1.NewNotificationsServiceClient, &cleanup)
 
 	apiTokenResolver := apitokenresolver.NewResolver(usersClient)
 
@@ -108,9 +117,50 @@ func run() error {
 	}()
 
 	if cfg.ZitiEnabled {
+		// Native mode terminates TLS for the vendor hostnames with leaves minted
+		// from the Egress CA. Absent, the platform path still serves: an
+		// environment in native mode simply has nothing to carry its traffic.
+		var nativeServer *native.Server
+		nativeCA, err := native.LoadCertificateAuthority(cfg.EgressCACertPath, cfg.EgressCAKeyPath)
+		if err != nil {
+			log.Printf("llm-proxy: native mode disabled: %v", err)
+		}
+
 		var listenerMu sync.Mutex
 		var currentListener net.Listener
+		var currentNative *native.Listener
 		listenerFactory := func(zitiCtx ziti.Context) (net.Listener, error) {
+			if nativeCA != nil {
+				// Rebuilt on re-enrollment alongside the platform listener: the
+				// old ziti context's binds do not survive it.
+				listenerMu.Lock()
+				previousNative := currentNative
+				vendorListener := native.NewListener(zitiCtx)
+				currentNative = vendorListener
+				listenerMu.Unlock()
+				if previousNative != nil {
+					_ = previousNative.Close()
+				}
+
+				nativeServer = native.NewServer(
+					vendorListener,
+					zitiMgmtClient,
+					llmClient,
+					native.NewLeafCertificateCache(nativeCA, leafCertificateTTL, leafCertificateCacheSize, native.SystemClock()),
+					proxy.NewNativeForwarder(&http.Client{}, meteringClient),
+				)
+				go func(server *native.Server) {
+					if err := server.Serve(ctx); err != nil && ctx.Err() == nil {
+						errCh <- fmt.Errorf("native server stopped: %w", err)
+					}
+				}(nativeServer)
+				go func(server *native.Server) {
+					subscriber := native.NewInvalidationSubscriber(notificationsClient, server)
+					if err := subscriber.Run(ctx); err != nil && ctx.Err() == nil {
+						log.Printf("llm-proxy: invalidation subscriber stopped: %v", err)
+					}
+				}(nativeServer)
+			}
 			return zitiCtx.ListenWithOptions("llm-proxy", ziti.DefaultListenOptions())
 		}
 		onNewListener := func(listener net.Listener) {
