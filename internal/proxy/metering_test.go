@@ -5,6 +5,7 @@ import (
 
 	llmv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/llm/v1"
 	meteringv1 "github.com/agynio/llm-proxy/.gen/go/agynio/api/metering/v1"
+	"github.com/agynio/llm-proxy/internal/identity"
 )
 
 func TestParseUsageFromPayloadOpenAIUsage(t *testing.T) {
@@ -228,4 +229,67 @@ func recordKinds(records []*meteringv1.UsageRecord) map[string]int {
 		counts[record.Labels["kind"]]++
 	}
 	return counts
+}
+
+// The Usage page ranks spend by instance, by agent, and by environment. The
+// OpenZiti identity is the only place a call carries all three, so a record
+// built without them can only be attributed to "unknown".
+func TestBuildUsageRecordsLabelsWorkloadLevels(t *testing.T) {
+	meta := meteringMetadata{
+		callID:  "call-1",
+		orgID:   "org-1",
+		modelID: "model-1",
+		identity: identity.ResolvedIdentity{
+			IdentityID:    "instance-1",
+			IdentityType:  identity.IdentityTypeAgentInstance,
+			AgentID:       "agent-1",
+			EnvironmentID: "environment-1",
+		},
+	}
+
+	records := buildUsageRecords(meta, nil, meteringStatusSuccess)
+	if len(records) != 1 {
+		t.Fatalf("expected 1 record, got %d", len(records))
+	}
+	labels := records[0].Labels
+	for key, want := range map[string]string{
+		meteringLabelAgentID:         "agent-1",
+		meteringLabelAgentInstanceID: "instance-1",
+		meteringLabelEnvironmentID:   "environment-1",
+	} {
+		if labels[key] != want {
+			t.Errorf("label %s = %q, want %q", key, labels[key], want)
+		}
+	}
+	if _, ok := labels[meteringLabelSandboxID]; ok {
+		t.Errorf("an instance is not a sandbox, got sandbox_id=%q", labels[meteringLabelSandboxID])
+	}
+}
+
+// Native mode resolves no sandbox record, so a sandbox's tokens were recorded
+// with nothing naming the sandbox. The identity already is the sandbox.
+func TestBuildUsageRecordsLabelsSandboxWithoutAResolvedRecord(t *testing.T) {
+	meta := meteringMetadata{
+		callID:  "call-1",
+		orgID:   "org-1",
+		modelID: "subscription-1",
+		native:  true,
+		identity: identity.ResolvedIdentity{
+			IdentityID:    "sandbox-1",
+			IdentityType:  identity.IdentityTypeSandbox,
+			EnvironmentID: "environment-1",
+		},
+	}
+
+	records := buildUsageRecords(meta, nil, meteringStatusSuccess)
+	labels := records[0].Labels
+	if labels[meteringLabelSandboxID] != "sandbox-1" {
+		t.Fatalf("sandbox_id = %q, want sandbox-1", labels[meteringLabelSandboxID])
+	}
+	if labels[meteringLabelEnvironmentID] != "environment-1" {
+		t.Fatalf("environment_id = %q, want environment-1", labels[meteringLabelEnvironmentID])
+	}
+	if _, ok := labels[meteringLabelAgentInstanceID]; ok {
+		t.Errorf("a sandbox is not an instance, got agent_instance_id=%q", labels[meteringLabelAgentInstanceID])
+	}
 }
