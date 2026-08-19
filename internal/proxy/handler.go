@@ -192,6 +192,7 @@ func (h *Handler) forwardResponse(w http.ResponseWriter, req *http.Request, meta
 	}
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		logUpstreamRefusal(resp.StatusCode, body)
 		h.recordMetering(meta, nil, meteringStatusFailed)
 		return
 	}
@@ -203,6 +204,28 @@ func (h *Handler) forwardResponse(w http.ResponseWriter, req *http.Request, meta
 		return
 	}
 	h.recordMetering(meta, &usage, meteringStatusSuccess)
+}
+
+// logUpstreamRefusal records why a provider refused a call.
+//
+// The status alone answers nothing: "upstream response status=400" is the same
+// line whether the model is unknown, the key is wrong, or the request is
+// malformed, and the body is the only place the provider says which. It is
+// bounded because a provider that answers 400 with a page of HTML should not
+// fill the log with it, and it is only read on a refusal, so a successful
+// call's body -- which carries what the model said -- is never logged.
+func logUpstreamRefusal(status int, body []byte) {
+	const maxLoggedBody = 2048
+	if len(body) == 0 {
+		return
+	}
+	snippet := body
+	truncated := ""
+	if len(snippet) > maxLoggedBody {
+		snippet = snippet[:maxLoggedBody]
+		truncated = "..."
+	}
+	log.Printf("proxy: upstream refused status=%d body=%s%s", status, strings.TrimSpace(string(snippet)), truncated)
 }
 
 func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *http.Request, protocol llmv1.Protocol, meta meteringMetadata) {
@@ -218,7 +241,12 @@ func (h *Handler) streamResponse(w http.ResponseWriter, r *http.Request, req *ht
 	copyHeaders(w.Header(), resp.Header, map[string]struct{}{"Content-Length": {}})
 	w.WriteHeader(resp.StatusCode)
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		_, _ = io.Copy(w, resp.Body)
+		failure, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			log.Printf("proxy: read upstream refusal: %v", readErr)
+		}
+		logUpstreamRefusal(resp.StatusCode, failure)
+		_, _ = w.Write(failure)
 		h.recordMetering(meta, nil, meteringStatusFailed)
 		return
 	}
